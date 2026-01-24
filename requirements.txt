@@ -1,2 +1,2 @@
-playwright
-google-generativeai
+playwright==1.49.0
+google-generativeai==0.8.3
