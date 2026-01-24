@@ -6,7 +6,28 @@ from playwright.sync_api import sync_playwright
 import google.generativeai as genai
 
 # --- CONFIGURATION ---
-HANDLES = ["elonmusk", "GaryVee"] # Add your handles here
+HANDLES = [
+    "levelsio", "marclou", "tdinh_me", "yongfook", "dannypostma", 
+    "SimonHoiberg", "tibo_maker", "ajlkn", "thepatwalls", "dvassallo", 
+    "arvidkahl", "andreyazimov", "pietrobianchini", "dagorenouf", "mubashariqbal", 
+    "sergiobeiraomar", "folbert", "lucas_perret", "johnrushx", "alexwestco", 
+    "tonydinh", "kharkwal_gagan", "p_v_g_t", "SarthakSadh", "sveta_bay", 
+    "KevonAS", "thisiskp_", "shashbag", "IndieJames_", "marckohlbrugge", 
+    "bentossell", "nathanbarry", "robwalling", "liam_darby", "lucasbuiltit", 
+    "theRealKSet", "IndiePaige", "shubham_upd", "damengchen", "philm_me", 
+    "pborenstein", "mikerubini", "romansitko", "h_makadia", "jakobgreenfeld", 
+    "justinjackson", "dru_riley", "monicalent", "petecodes", "jasonleow", 
+    "nicoverbruggen", "vponamariov", "SaaS_Nico", "saas_guy", "IndieHacker_HQ", 
+    "mrdanrowe", "shivam_shubham", "tudorbarbu", "dominik_sumer", "jake_prins", 
+    "imkevinpy", "SaaS_Journal", "nico_jeannen", "thesamparr", "sarthakgh", 
+    "ankitsaurav", "dabit3", "tallyforms", "the_yash_chavan", "paul_yacoubian", 
+    "wwshaef", "tylermking", "rchase", "iammarcthomas", "gvrizzo", 
+    "dsabar", "merott", "stephan_nasser", "jess_wallace_", "heyrobin_b", 
+    "marcus_at_work", "shripad_dev", "v_p_s_g", "saas_mark", "solo_founder", 
+    "bootstrapped_dev", "shippable_it", "shivam_dev", "indie_maker_max", "dev_solo_v", 
+    "saas_growth_logs", "micro_saas_ceo", "build_in_pub_alex", "tom_jacquesson", "devan_s", 
+    "marie_martens", "noah_bragg", "ch_daniel", "amar_ghose", "pete_codes"
+] # Add your handles here
 SEEN_POSTS_FILE = "seen_posts.json"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 COOKIES_JSON = os.getenv("X_COOKIES")
