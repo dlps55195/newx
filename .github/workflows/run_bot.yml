@@ -1,0 +1,37 @@
+name: X Auto-Reply Bot
+
+on:
+  schedule:
+    - cron: '*/30 * * * *' # Runs every 30 minutes
+  workflow_dispatch: # Allows you to run it manually
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright google-generativeai
+          playwright install chromium --with-deps
+
+      - name: Run Bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          X_COOKIES: ${{ secrets.X_COOKIES }}
+        run: python bot.py
+
+      - name: Commit Updated History
+        run: |
+          git config --global user.name "Bot"
+          git config --global user.email "bot@github.com"
+          git add seen_posts.json
+          git commit -m "Update seen posts" || echo "No changes to commit"
+          git push
