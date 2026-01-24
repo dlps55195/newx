@@ -37,7 +37,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def get_ai_reply(tweet_text):
-    prompt = f"Write a short, engaging, and valuable reply to this tweet: '{tweet_text}'. Be human, avoid bot-like language, and keep it under 200 characters."
+    prompt = f"Write a short, engaging, and valuable reply to this tweet: '{tweet_text}'. Be human, avoid bot-like language, and keep it under 100 characters."
     response = model.generate_content(prompt)
     return response.text.strip()
 
