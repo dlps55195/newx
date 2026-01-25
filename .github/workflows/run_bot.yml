@@ -1,37 +1,41 @@
-name: X Auto-Reply Bot
+name: X Fast Bot
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # Runs every 30 minutes
-  workflow_dispatch: # Allows you to run it manually
+    - cron: '*/5 * * * *'  # Runs every 5-10 minutes (Max Free Speed)
+  workflow_dispatch:       # Allows manual "Run Now" button
+
+permissions:
+  contents: write          # REQUIRED to save the 'seen_posts.json' file
 
 jobs:
-  run-bot:
+  check-and-reply:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.11' # Best version for new AI libs
 
-      - name: Install Dependencies
+      - name: Install Tools
         run: |
-          pip install playwright google-generativeai
+          pip install --upgrade pip
+          pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      - name: Run Bot
+      - name: Run Bot Logic
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           X_COOKIES: ${{ secrets.X_COOKIES }}
         run: python bot.py
 
-      - name: Commit Updated History
+      - name: Save Memory (Commit Changes)
         run: |
-          git config --global user.name "Bot"
-          git config --global user.email "bot@github.com"
+          git config --global user.name "AutoBot"
+          git config --global user.email "bot@noreply.github.com"
           git add seen_posts.json
-          git commit -m "Update seen posts" || echo "No changes to commit"
+          git commit -m "Log replied post" || echo "No new replies to save"
           git push
