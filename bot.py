@@ -93,6 +93,7 @@ async def run_bot():
             await context.add_cookies(sanitize_cookies(json.loads(COOKIES_JSON)))
         except Exception as e:
             print(f"❌ Cookie Error: {e}")
+            await browser.close()
             return
 
         page = await context.new_page()
@@ -112,8 +113,12 @@ async def run_bot():
             await asyncio.sleep(3)
 
             # Wait for tweets to appear
-            await page.wait_for_selector('article[data-testid="tweet"]', timeout=20000)
-            
+            try:
+                await page.wait_for_selector('article[data-testid="tweet"]', timeout=20000)
+            except:
+                print("   ⚠️ Timeline did not load. Check cookies or List URL.")
+                return
+
             # Get all visible tweets (Usually the top 5-10 most recent)
             tweets = await page.locator('article[data-testid="tweet"]').all()
             print(f"   found {len(tweets)} recent tweets in the list.")
@@ -123,14 +128,11 @@ async def run_bot():
                 try:
                     # Extract Tweet Text
                     tweet_text = await tweet.inner_text()
-                    
-                    # Generate a unique ID based on the text content (simple but effective)
-                    # In a full app, we would scrape the data-tweet-id attribute, but this is safer for stealth
                     text_lines = tweet_text.split('\n')
                     clean_text = " ".join(text_lines)
                     short_id = clean_text[:60] # Use first 60 chars as ID
                     
-                    # Try to find the handle (usually the 2nd line in inner_text, e.g., @elonmusk)
+                    # Try to find the handle
                     handle = "Unknown"
                     for line in text_lines:
                         if line.startswith("@"):
@@ -142,22 +144,54 @@ async def run_bot():
                     if short_id not in seen_posts:
                         print(f"      ✨ NEW POST detected!")
                         
-                        # Generate AI Reply
                         reply_content = get_ai_reply(clean_text)
                         
                         if reply_content:
                             print(f"      📝 AI wrote: {reply_content}")
                             
-                            # Click Reply Icon (scoped to this specific tweet)
-                            reply_button = tweet.locator('[data-testid="reply"]')
-                            await reply_button.click()
+                            # Click Reply Icon
+                            await tweet.locator('[data-testid="reply"]').click()
                             
                             # Wait for the modal to open
                             await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=8000)
                             
-                            # Type the reply (Human typing speed)
+                            # Type the reply
                             await page.fill('[data-testid="tweetTextarea_0"]', reply_content)
                             await asyncio.sleep(random.uniform(1.5, 3.5))
                             
-                            # Click 'Reply' button in the modal
-                            await page.click('[data-testid="tweetButton"]')
+                            # Click 'Reply' button - Try both selectors just in case
+                            try:
+                                await page.click('[data-testid="tweetButtonInline"]', timeout=2000)
+                            except:
+                                await page.click('[data-testid="tweetButton"]', timeout=2000)
+                            
+                            # Wait for modal to disappear (Confirm sent)
+                            await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden")
+                            print(f"      ✅ Reply Sent!")
+                            
+                            # Update Memory
+                            seen_posts[short_id] = "replied"
+                            with open(SEEN_POSTS_FILE, 'w') as f:
+                                json.dump(seen_posts, f)
+                            
+                            # PAUSE: Random wait to avoid spam detection
+                            wait_time = random.randint(15, 35)
+                            print(f"      💤 Waiting {wait_time}s before next check...")
+                            await asyncio.sleep(wait_time)
+                            
+                    else:
+                        print(f"      (Already seen)")
+
+                except Exception as e:
+                    print(f"      ⚠️ Skipped tweet: {str(e)[:50]}")
+                    continue
+
+        except Exception as e:
+            print(f"❌ Main Loop Error: {e}")
+            await page.screenshot(path="error_screenshot.png")
+            
+        finally:
+            await browser.close()
+
+if __name__ == "__main__":
+    asyncio.run(run_bot())
