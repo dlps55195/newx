@@ -1,9 +1,10 @@
-import os
+importimport os
 import json
 import time
 import random
 from playwright.sync_api import sync_playwright
-from google.genai import Client  # Fixed Import logic
+from google import genai
+from google.genai import types
 
 # --- CONFIGURATION ---
 HANDLES = [
@@ -32,37 +33,44 @@ SEEN_POSTS_FILE = "seen_posts.json"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 COOKIES_JSON = os.getenv("X_COOKIES")
 
-# Initialize Gemini 2.0 Client
-client = Client(api_key=GEMINI_API_KEY)
+# Initialize the Free Gemini 1.5 Flash Client
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 def get_ai_reply(tweet_text):
+    """Generates a reply using the free, high-rate-limit Gemini model."""
     prompt = (
-        f"Analyze this tweet: '{tweet_text}'. "
-        "Write a short, meaningful, and valuable reply. "
-        "Sound like a helpful peer, not a bot. Under 200 characters."
+        f"You are a helpful, witty social media user. Read this tweet: '{tweet_text}'. "
+        "Draft a genuine, non-robotic reply that adds value. "
+        "Keep it under 240 characters. No hashtags."
     )
-    # Using the latest 2026 flash model
+    
+    # gemini-1.5-flash is free and fast
     response = client.models.generate_content(
-        model='gemini-2.0-flash', 
-        contents=prompt
+        model='gemini-1.5-flash',
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.7 # varied and creative
+        )
     )
     return response.text.strip()
 
 def sanitize_cookies(cookie_list):
-    """Normalizes cookie attributes for Playwright compatibility."""
-    allowed_samesite = ["Strict", "Lax", "None"]
+    """Fixes the 'Strict/Lax/None' error for Playwright."""
+    allowed = ["Strict", "Lax", "None"]
     for cookie in cookie_list:
         if "sameSite" in cookie:
+            # Capitalize properly (e.g., 'lax' -> 'Lax')
             val = str(cookie["sameSite"]).capitalize()
-            cookie["sameSite"] = val if val in allowed_samesite else "Lax"
+            cookie["sameSite"] = val if val in allowed else "Lax"
     return cookie_list
 
 def run_bot():
     if not COOKIES_JSON:
-        print("Missing X_COOKIES secret!")
+        print("❌ Error: X_COOKIES Secret is missing.")
         return
 
     with sync_playwright() as p:
+        # Launch browser invisibly
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -73,53 +81,72 @@ def run_bot():
             raw_cookies = json.loads(COOKIES_JSON)
             context.add_cookies(sanitize_cookies(raw_cookies))
         except Exception as e:
-            print(f"Cookie Error: {e}")
+            print(f"❌ Cookie Error: {e}")
             return
 
-        # Load Memory
+        # Load "Memory" of past replies
         if os.path.exists(SEEN_POSTS_FILE):
-            with open(SEEN_POSTS_FILE, 'r') as f:
-                seen_posts = json.load(f)
+            try:
+                with open(SEEN_POSTS_FILE, 'r') as f:
+                    seen_posts = json.load(f)
+            except:
+                seen_posts = {}
         else:
             seen_posts = {}
 
+        # Scan all creators
         for handle in HANDLES:
-            print(f"Checking @{handle}...")
+            print(f"🔍 Checking @{handle}...")
             page = context.new_page()
             try:
+                # Fast-load strategy
                 page.goto(f"https://x.com/{handle}", wait_until="domcontentloaded")
-                # Wait for the timeline to appear
-                page.wait_for_selector('[data-testid="tweet"]', timeout=20000)
                 
-                # Grab the text of the most recent tweet
+                # Wait up to 10s for tweets to appear
+                try:
+                    page.wait_for_selector('[data-testid="tweet"]', timeout=10000)
+                except:
+                    print(f"   -> No tweets found/Timeline didn't load for {handle}")
+                    page.close()
+                    continue
+
+                # Get the newest tweet
                 first_tweet = page.locator('[data-testid="tweet"]').first
-                tweet_text = first_tweet.inner_text()
+                tweet_text = first_tweet.inner_text().replace('\n', ' ')
                 
-                # Check if we've replied to this specific text before
-                if handle not in seen_posts or seen_posts[handle] != tweet_text[:50]:
-                    print(f"New content found for {handle}!")
+                # Create a simple unique ID from the text (first 50 chars)
+                tweet_id = tweet_text[:50]
+
+                # If this is a NEW post we haven't replied to yet:
+                if handle not in seen_posts or seen_posts[handle] != tweet_id:
+                    print(f"   ✨ New Post Detected!")
+                    
+                    # 1. Generate AI Reply
                     reply_text = get_ai_reply(tweet_text)
                     
-                    # Open reply box
+                    # 2. Click Reply
                     first_tweet.locator('[data-testid="reply"]').click()
                     page.wait_for_selector('[data-testid="tweetTextarea_0"]')
                     
-                    # Human-like typing delay
+                    # 3. Type & Send
                     page.fill('[data-testid="tweetTextarea_0"]', reply_text)
-                    time.sleep(random.uniform(2, 5))
-                    
-                    # Send
+                    time.sleep(random.uniform(2, 5)) # Human pause
                     page.click('[data-testid="tweetButton"]')
-                    print(f"Replied to {handle}: {reply_text}")
                     
-                    # Record this post as seen
-                    seen_posts[handle] = tweet_text[:50]
+                    print(f"   ✅ Sent: {reply_text}")
+                    
+                    # 4. Save to memory
+                    seen_posts[handle] = tweet_id
+                else:
+                    print(f"   (Already replied to latest)")
+
             except Exception as e:
-                print(f"Error checking {handle}: {e}")
+                print(f"   ⚠️ Error processing {handle}: {e}")
             finally:
                 page.close()
+                time.sleep(2) # Brief pause between profiles
 
-        # Save memory back to repo
+        # Save Updated Memory
         with open(SEEN_POSTS_FILE, 'w') as f:
             json.dump(seen_posts, f)
         
@@ -127,3 +154,48 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+File 3: .github/workflows/run_bot.yml
+This workflow is tuned to run every 5 minutes (*/5). This is the absolute limit of GitHub's free scheduler.
+
+YAML
+name: X Fast Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Runs every 5-10 minutes (Max Free Speed)
+  workflow_dispatch:       # Allows manual "Run Now" button
+
+permissions:
+  contents: write          # REQUIRED to save the 'seen_posts.json' file
+
+jobs:
+  check-and-reply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # Best version for new AI libs
+
+      - name: Install Tools
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Run Bot Logic
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          X_COOKIES: ${{ secrets.X_COOKIES }}
+        run: python bot.py
+
+      - name: Save Memory (Commit Changes)
+        run: |
+          git config --global user.name "AutoBot"
+          git config --global user.email "bot@noreply.github.com"
+          git add seen_posts.json
+          git commit -m "Log replied post" || echo "No new replies to save"
+          git push
