@@ -42,12 +42,27 @@ def sanitize_cookies(cookie_list):
     return cookie_list
 
 async def run_bot():
+    # --- HEARTBEAT & STEALTH LOGIC ---
+    print("💓 Heartbeat: Sniper Bot is awake and checking the schedule.")
+    
+    # 15% chance to just "lurk" and exit. 
+    # This breaks the robotic pattern to avoid X's detection.
+    if random.random() < 0.15:
+        print("🤫 Stealth Mode: Lurking this round to stay under the radar. Exiting.")
+        return
+
+    # --- LOAD MEMORY ---
     if not os.path.exists(SEEN_POSTS_FILE):
         seen_posts = {}
+        # Create the file if it doesn't exist so git can track it
+        with open(SEEN_POSTS_FILE, 'w') as f:
+            json.dump({}, f)
     else:
         with open(SEEN_POSTS_FILE, 'r') as f:
-            try: seen_posts = json.load(f)
-            except: seen_posts = {}
+            try: 
+                seen_posts = json.load(f)
+            except: 
+                seen_posts = {}
 
     async with async_playwright() as p:
         ua = UserAgent()
