@@ -22,15 +22,20 @@ def get_ai_reply(tweet_text):
     payload = {
         "model": "google/gemini-2.0-flash-001",
         "messages": [
-            {"role": "system", "content": "You are a casual peer on X. Give a short, 1-sentence reply. No hashtags, no corporate talk. Be chill."},
+            {"role": "system", "content": "You are a casual peer on X. Give a short, 1-sentence reply. No hashtags, no corporate talk. Be chill. Lowercase is fine."},
             {"role": "user", "content": tweet_text}
         ]
     }
     try:
         with httpx.Client() as client:
             response = client.post(url, headers=headers, json=payload, timeout=30.0)
-            return response.json()['choices'][0]['message']['content'].strip().replace('"', '')
-    except:
+            if response.status_code == 200:
+                return response.json()['choices'][0]['message']['content'].strip().replace('"', '')
+            else:
+                print(f"⚠️ AI Error: {response.status_code}")
+                return None
+    except Exception as e:
+        print(f"⚠️ AI Exception: {e}")
         return None
 
 def sanitize_cookies(cookie_list):
@@ -66,6 +71,7 @@ async def run_bot():
 
     async with async_playwright() as p:
         ua = UserAgent()
+        # Headless mode ON for GitHub Actions
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
         context = await browser.new_context(user_agent=ua.random)
         
@@ -75,61 +81,101 @@ async def run_bot():
         try:
             cookies = json.loads(os.getenv("X_COOKIES"))
             await context.add_cookies(sanitize_cookies(cookies))
-        except: return
+        except: 
+            print("❌ Error: X_COOKIES not found or invalid.")
+            return
 
         page = await context.new_page()
-        # Block images for speed
+        # Block images/fonts for speed
         await page.route("**/*.{png,jpg,jpeg,gif,webp,svg,mp4,woff2}", lambda route: route.abort())
 
         print(f"📡 Scanning List for newest post...")
-        await page.goto(LIST_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(4) # Wait for JS to render tweets
+        
+        try:
+            # use 'networkidle' to wait until data actually loads
+            await page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
+        except:
+            print("⚠️ Page load timeout (network might be slow). Continuing anyway...")
+
+        # --- JIGGLE SCROLL ---
+        # Scroll down and up slightly to force X to render the "lazy" tweets
+        await page.mouse.wheel(0, 600)
+        await asyncio.sleep(2)
+        await page.mouse.wheel(0, -600)
+        await asyncio.sleep(2)
 
         # Get all tweets on the screen
+        try:
+            await page.wait_for_selector('article[data-testid="tweet"]', timeout=20000)
+        except:
+            print("📭 No tweets loaded. The list might be empty or restricted.")
+            await browser.close()
+            return
+
         tweets = await page.locator('article[data-testid="tweet"]').all()
+        print(f"👀 Found {len(tweets)} tweets on screen.")
         
         target_tweet = None
         target_id = None
 
         # Find the FIRST tweet in the list that we haven't seen
         for tweet in tweets:
-            tweet_text = await tweet.inner_text()
-            # Unique ID based on the first 60 chars of the post
-            post_id = tweet_text.split('\n')[0][:60] 
+            try:
+                full_text = await tweet.inner_text()
+                # Create a UNIQUE ID based on Name + Handle + Content
+                # This fixes the bug where "Elon Musk" was the only ID
+                clean_text = full_text.replace('\n', ' ').strip()
+                post_id = clean_text[:80] # First 80 chars includes Name + Handle + Start of tweet
 
-            if post_id not in seen_posts:
-                print(f"🎯 Sniper Target Found: {post_id[:30]}...")
-                target_tweet = tweet
-                target_id = post_id
-                break # Stop looking, we found the newest one
+                if post_id not in seen_posts:
+                    print(f"🎯 Sniper Target Found: {post_id[:30]}...")
+                    target_tweet = tweet
+                    target_id = post_id
+                    break # Stop looking, we found the newest one
+            except:
+                continue
 
         if target_tweet:
-            reply_content = get_ai_reply(await target_tweet.inner_text())
+            # Generate AI Reply
+            tweet_content_for_ai = (await target_tweet.inner_text()).replace('\n', ' ')
+            reply_content = get_ai_reply(tweet_content_for_ai)
+            
             if reply_content:
                 print(f"✍️ Replying: {reply_content}")
-                await target_tweet.locator('[data-testid="reply"]').click()
-                await page.wait_for_selector('[data-testid="tweetTextarea_0"]')
                 
-                # Human typing
-                for char in reply_content:
-                    await page.type('[data-testid="tweetTextarea_0"]', char, delay=random.randint(40, 100))
-                
-                await asyncio.sleep(2)
                 try:
-                    await page.click('[data-testid="tweetButtonInline"]', timeout=3000)
-                except:
-                    await page.click('[data-testid="tweetButton"]')
-                
-                # Wait for success
-                await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden")
-                print("✅ Sniper Mission Complete.")
-                
-                # Update memory
-                seen_posts[target_id] = "replied"
-                with open(SEEN_POSTS_FILE, 'w') as f:
-                    json.dump(seen_posts, f)
+                    # Click Reply
+                    reply_button = target_tweet.locator('[data-testid="reply"]')
+                    await reply_button.click()
+                    
+                    # Wait for text box
+                    await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
+                    
+                    # Human typing simulation
+                    for char in reply_content:
+                        await page.type('[data-testid="tweetTextarea_0"]', char, delay=random.randint(40, 100))
+                    
+                    await asyncio.sleep(2)
+                    
+                    # Click Tweet
+                    try:
+                        await page.click('[data-testid="tweetButtonInline"]', timeout=3000)
+                    except:
+                        await page.click('[data-testid="tweetButton"]')
+                    
+                    # Wait for success (box disappears)
+                    await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=10000)
+                    print("✅ Sniper Mission Complete.")
+                    
+                    # Update memory
+                    seen_posts[target_id] = "replied"
+                    with open(SEEN_POSTS_FILE, 'w') as f:
+                        json.dump(seen_posts, f)
+                except Exception as e:
+                    print(f"❌ Error during reply action: {e}")
+
         else:
-            print("📭 No new tweets found since last scan.")
+            print("📭 Verified: No new tweets found in this scan.")
 
         await browser.close()
 
