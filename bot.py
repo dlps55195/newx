@@ -27,6 +27,7 @@ def get_ai_reply(tweet_text):
         "3. HUMOR: If it's casual or a meme, be witty, sarcastic, or chill.\n\n"
         "RULES:\n"
         "- 1 sentence only.\n"
+        "- DO NOT include the category name (like 'Educational:' or 'Humor:') in your reply.\n"
         "- No hashtags, no corporate jargon, no emojis (unless ironic).\n"
         "- Use lowercase if it feels more natural.\n"
         "- Be authentic, like a real person in the conversation."
