@@ -9,10 +9,10 @@ from playwright.async_api import async_playwright
 # --- CONFIG ---
 LIST_URL = "https://x.com/i/lists/2011289206513930641"
 SEEN_POSTS_FILE = "seen_posts.json"
-AI_API_KEY = os.getenv("AI_API_KEY") # OpenRouter Key
+AI_API_KEY = os.getenv("AI_API_KEY") 
 
 def get_ai_reply(tweet_text):
-    """Generates a strategic reply based on tweet context."""
+    """Generates a strategic reply: Educational, Engagement, or Humor."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",
@@ -20,7 +20,6 @@ def get_ai_reply(tweet_text):
         "Content-Type": "application/json"
     }
     
-    # THE SMART SYSTEM PROMPT
     system_content = (
         "You are a strategic X growth expert. Analyze the tweet and choose the BEST response style:\n"
         "1. EDUCATIONAL: If the tweet is informative, add a tiny helpful tip or fact.\n"
@@ -46,11 +45,8 @@ def get_ai_reply(tweet_text):
             response = client.post(url, headers=headers, json=payload, timeout=30.0)
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content'].strip().replace('"', '')
-            else:
-                print(f"⚠️ AI Error: {response.status_code}")
-                return None
-    except Exception as e:
-        print(f"⚠️ AI Exception: {e}")
+            return None
+    except:
         return None
 
 def sanitize_cookies(cookie_list):
@@ -66,7 +62,7 @@ async def run_bot():
     
     # 15% Stealth Lurk
     if random.random() < 0.15:
-        print("🤫 Stealth Mode: Lurking to break patterns. Exiting.")
+        print("🤫 Stealth Mode: Lurking. Exiting.")
         return
 
     # --- LOAD MEMORY ---
@@ -81,71 +77,104 @@ async def run_bot():
 
     async with async_playwright() as p:
         ua = UserAgent()
-        browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
-        context = await browser.new_context(user_agent=ua.random)
+        browser = await p.chromium.launch(headless=True, args=[
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox'
+        ])
+        
+        context = await browser.new_context(
+            user_agent=ua.random,
+            viewport={'width': 1280, 'height': 720}
+        )
+        
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         try:
             cookies = json.loads(os.getenv("X_COOKIES"))
             await context.add_cookies(sanitize_cookies(cookies))
-        except: 
-            print("❌ Error: X_COOKIES invalid.")
+        except Exception as e: 
+            print(f"❌ Error: X_COOKIES invalid: {e}")
             return
 
         page = await context.new_page()
+        # Block heavy media to save GitHub bandwidth
         await page.route("**/*.{png,jpg,jpeg,gif,webp,svg,mp4,woff2}", lambda route: route.abort())
 
-        print(f"📡 Scanning List for newest post...")
+        print(f"📡 Navigating to List...")
         try:
-            await page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
-        except:
-            print("⚠️ Timeout. Scanning whatever loaded.")
+            await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(7) # Critical for X's heavy JS
+        except Exception as e:
+            print(f"⚠️ Navigation failed: {e}")
 
-        # Jiggle Scroll to force newest posts to appear
-        await page.mouse.wheel(0, 500)
-        await asyncio.sleep(2)
-        await page.mouse.wheel(0, -500)
-        await asyncio.sleep(2)
-
-        try:
-            await page.wait_for_selector('article[data-testid="tweet"]', timeout=20000)
-        except:
-            print("📭 No tweets found.")
+        # --- DIAGNOSTICS ---
+        current_url = page.url
+        print(f"📍 Bot is currently at: {current_url}")
+        
+        if "login" in current_url:
+            print("❌ SESSION EXPIRED: X redirected to login. Refresh your cookies!")
+            await page.screenshot(path="login_wall.png")
             await browser.close()
             return
 
-        tweets = await page.locator('article[data-testid="tweet"]').all()
+        # --- JIGGLE SCROLL ---
+        await page.mouse.wheel(0, 500)
+        await asyncio.sleep(2)
+        await page.mouse.wheel(0, -500)
+        await asyncio.sleep(3)
+
+        # --- MULTI-SELECTOR SEARCH ---
+        selectors = [
+            'article[data-testid="tweet"]',
+            'div[data-testid="cellInnerDiv"]',
+            '[role="article"]'
+        ]
         
+        tweets = []
+        for selector in selectors:
+            found = await page.locator(selector).all()
+            if len(found) > 0:
+                tweets = found
+                print(f"✅ Found {len(tweets)} elements using selector: {selector}")
+                break
+
+        if not tweets:
+            print("📭 Truly no tweets found. Taking screenshot...")
+            await page.screenshot(path="no_tweets_debug.png")
+            await browser.close()
+            return
+
+        # --- SNIPER LOGIC ---
         target_tweet = None
         target_id = None
 
         for tweet in tweets:
             try:
-                full_text = await tweet.inner_text()
-                # UNIQUE ID: Uses handle + snippet to prevent 'Same User' skip bug
-                clean_text = full_text.replace('\n', ' ').strip()
-                post_id = clean_text[:80] 
+                raw_text = await tweet.inner_text()
+                if not raw_text.strip(): continue
+                
+                # UNIQUE ID: Handle + first bit of text
+                clean_text = raw_text.replace('\n', ' ').strip()
+                post_id = clean_text[:100]
 
                 if post_id not in seen_posts:
-                    print(f"🎯 Sniper Target Found: {post_id[:40]}...")
+                    print(f"🎯 Target Acquired: {post_id[:40]}...")
                     target_tweet = tweet
                     target_id = post_id
-                    break 
-            except:
-                continue
+                    break
+            except: continue
 
         if target_tweet:
-            tweet_content_for_ai = (await target_tweet.inner_text()).replace('\n', ' ')
-            reply_content = get_ai_reply(tweet_content_for_ai)
+            tweet_content = (await target_tweet.inner_text()).replace('\n', ' ')
+            reply_text = get_ai_reply(tweet_content)
             
-            if reply_content:
-                print(f"✍️ Replying: {reply_content}")
+            if reply_text:
+                print(f"✍️ Strategic Reply: {reply_text}")
                 try:
                     await target_tweet.locator('[data-testid="reply"]').click()
                     await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=10000)
                     
-                    # Human typing
-                    for char in reply_content:
+                    for char in reply_text:
                         await page.type('[data-testid="tweetTextarea_0"]', char, delay=random.randint(40, 100))
                     
                     await asyncio.sleep(2)
@@ -157,14 +186,12 @@ async def run_bot():
                     await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=10000)
                     print("✅ Sniper Mission Complete.")
                     
-                    # Update memory
                     seen_posts[target_id] = "replied"
                     with open(SEEN_POSTS_FILE, 'w') as f:
                         json.dump(seen_posts, f)
                 except Exception as e:
-                    print(f"❌ Action Error: {e}")
-        else:
-            print("📭 No new tweets found.")
+                    print(f"❌ Action failed: {e}")
+                    await page.screenshot(path="action_error.png")
 
         await browser.close()
 
