@@ -1,50 +1,64 @@
-name: X Sniper Bot
+name: X Bot Human
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:      # Allows you to click "Run workflow" manually
+    - cron: '*/45 * * * *' # Runs approx every 45 mins
+  workflow_dispatch:      # Allows manual trigger button
 
 jobs:
-  run-sniper:
+  run-bot:
     runs-on: ubuntu-latest
-    # Important: Give the bot permission to write the 'seen_posts' file back to your repo
     permissions:
       contents: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip' # 1. Caches Python packages
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install playwright httpx fake-useragent
-          python -m playwright install chromium --with-deps
+      - name: Install Dependencies
+        run: pip install playwright httpx fake-useragent
 
-      - name: Run Sniper Bot
+      # 2. Cache Playwright Browser (Saves ~2 mins)
+      - name: Cache Playwright
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-v1
+      
+      - name: Install Playwright
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: python -m playwright install chromium --with-deps
+
+      - name: Install Playwright deps (always needed)
+        run: python -m playwright install-deps chromium
+
+      # 3. Restore "Memory" (Prevents double posting)
+      - name: Restore Bot Memory
+        uses: actions/cache@v4
+        with:
+          path: seen_posts.json
+          key: ${{ runner.os }}-memory-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-memory-
+
+      - name: Run Bot
         env:
-          X_COOKIES: ${{ secrets.X_COOKIES }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          X_COOKIES: ${{ secrets.X_COOKIES }}
         run: python bot.py
 
-      - name: Save Memory (seen_posts.json)
-        run: |
-          git config --global user.name "X-Sniper-Bot"
-          git config --global user.email "actions@github.com"
-          # Only commit if the file actually changed
-          git add seen_posts.json
-          git commit -m "Update memory: seen posts [skip ci]" || echo "No new posts to remember."
-          git push
-
-      - name: Upload Debug Images
+      # 4. Upload Debug Screenshots (Only if something fails)
+      - name: Upload Debug Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bot-debug-screenshots
+          name: debug-screenshots
           path: ./*.png
+          retention-days: 3
