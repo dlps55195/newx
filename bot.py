@@ -52,41 +52,61 @@ async def simulate_reading(page, tweet_element):
         await human_delay(0.5, 1.5)
 
 def get_ai_reply(tweet_text):
-    """Generates the strategy reply with STRICT formatting."""
+    """Generates a reply using the user's specific strategic prompt."""
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {AI_API_KEY}",
+        "HTTP-Referer": "https://github.com/newx",
+        "Content-Type": "application/json"
+    }
     
-    # The "Anti-Robot" System Prompt
-    system_content = (
-        "You are a casual X user. Read the tweet and reply using one of these styles:\n"
-        "1. FACT: A tiny relevant fact.\n"
-        "2. QUESTION: A short, sharp question.\n"
-        "3. WIT: A sarcastic or chill observation.\n\n"
-        "CRITICAL RULES:\n"
-        "- Reply ONLY with the text. Do not write 'Fact:' or 'Humor:'.\n"
-        "- Lowercase is preferred.\n"
-        "- No emojis unless ironic.\n"
-        "- Maximum 15 words."
-    )
-    
+    # Your exact prompt formatted for the AI
+    prompt = f"""
+You are a casual X user whose job is to read a single tweet (variable: {tweet_text}) and produce exactly one reply text that maximizes appropriateness & engagement.
+
+STEP 1 — choose the best reply style from these three, using the tweet's content and tone:
+  • FACT — a tiny, directly relevant fact (use when the tweet states a claim, stat, or shares new info).  
+  • QUESTION — a short, sharp question that encourages a reply (use when the tweet is open, asks something, or invites conversation).  
+  • WIT — a brief sarcastic/chill observation (use when the tweet is playful, ranty, or ironic). always append " lol" at the end for WIT.
+
+STEP 2 — generate the reply following these strict rules:
+  - output only the reply text (no labels, explanations, or metadata).  
+  - prefer lowercase (use proper punctuation only where needed).  
+  - no emojis unless used ironically to amplify wit.  
+  - maximum 15 words. Count words precisely.  
+  - do not write "fact:", "question:", "wit:", or any style tag.  
+  - QUESTION replies must end with a question mark.  
+  - FACT replies must be concise and directly tied to the tweet's claim/context.  
+  - WIT replies must include " lol" at the end (space + lol).  
+  - if the tweet contains disallowed content you cannot engage with, reply with: "i can't reply to that." (all lowercase; counts toward 15 words).
+
+INPUT: the variable contains the full text of the tweet to respond to.
+
+OUTPUT: a single line — the reply text only, obeying every rule above.
+"""
+
     payload = {
         "model": "google/gemini-2.0-flash-001",
         "messages": [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": tweet_text}
+            {"role": "user", "content": prompt} # Note: Sent as a single user message for direct instruction
         ]
     }
     
     try:
         with httpx.Client() as client:
-            res = client.post(url, headers=headers, json=payload, timeout=25)
-            if res.status_code == 200:
-                raw = res.json()['choices'][0]['message']['content'].strip()
-                # Clean any leaked prefixes
-                clean = re.sub(r'^(Educational|Humor|Engagement|Fact|Reply):\s*', '', raw, flags=re.IGNORECASE)
-                return clean.replace('"', '')
+            response = client.post(url, headers=headers, json=payload, timeout=30.0)
+            if response.status_code == 200:
+                content = response.json()['choices'][0]['message']['content'].strip()
+                
+                # FINAL SAFETY CLEANUP: 
+                # Removes labels like "WIT:", "FACT:", or "QUESTION:" if the AI ignores the prompt
+                clean_content = re.sub(r'^(fact|question|wit|reply|response):\s*', '', content, flags=re.IGNORECASE)
+                
+                return clean_content.replace('"', '')
             return None
-    except: return None
+    except Exception as e:
+        print(f"AI Error: {e}")
+        return None
 
 # --- MAIN BOT LOOP ---
 
