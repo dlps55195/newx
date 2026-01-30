@@ -28,10 +28,10 @@ async def human_type(page, selector, text):
     for char in text:
         if random.random() < 0.03:
             await page.keyboard.press(random.choice('abcdefg'))
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.15)
             await page.keyboard.press("Backspace")
         await page.keyboard.type(char)
-        await asyncio.sleep(random.uniform(0.05, 0.12))
+        await asyncio.sleep(random.uniform(0.04, 0.10))
 
 def get_ai_reply(tweet_text):
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -45,25 +45,21 @@ def get_ai_reply(tweet_text):
 
 async def run_bot():
     print("💓 Bot Start: Checking for fresh content...")
-    
-    # 1. Check AI Key
     if not AI_API_KEY:
-        print("❌ CRITICAL: AI_API_KEY is missing from Secrets.")
+        print("❌ CRITICAL: AI_API_KEY is missing.")
         return
 
-    # 2. Load Memory
     seen_posts = {}
     if os.path.exists(SEEN_POSTS_FILE):
         try:
             with open(SEEN_POSTS_FILE, 'r') as f: seen_posts = json.load(f)
-        except: print("⚠️ Memory file corrupted, starting fresh.")
+        except: pass
 
     async with async_playwright() as p:
         print("🌐 Launching Stealth Browser...")
-        browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
-        context = await browser.new_context(user_agent=UserAgent().random)
+        browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
+        context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1280, 'height': 800})
         
-        # 3. Cookie Validation
         cookie_raw = os.getenv("X_COOKIES")
         if not cookie_raw:
             print("❌ CRITICAL: X_COOKIES is empty.")
@@ -71,16 +67,12 @@ async def run_bot():
         await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
 
         page = await context.new_page()
-        
-        # 4. Navigation Flow
         print(f"📡 Navigating to List: {LIST_URL}")
         await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(5) # Allow dynamic content to load
+        await asyncio.sleep(6) 
 
-        # 5. Freshness Filtering (5 Minutes)
+        # Scan and filter
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
-        print(f"🔎 Found {len(tweet_elements)} total tweets on page.")
-        
         candidates = []
         five_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
 
@@ -88,7 +80,6 @@ async def run_bot():
             try:
                 time_tag = tweet.locator("time")
                 if not await time_tag.count(): continue
-                
                 iso_time = await time_tag.get_attribute("datetime")
                 tweet_time = datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
                 
@@ -99,26 +90,46 @@ async def run_bot():
                         candidates.append({"element": tweet, "text": text_content, "id": post_id})
             except: continue
 
-        print(f"🎯 Candidates within 5-min window: {len(candidates)}")
+        print(f"🎯 Candidates found: {len(candidates)}")
         
-        # 6. Execute up to 3 Replies
         for target in candidates[:3]:
-            print(f"📝 Replying to: {target['id'][:40]}...")
+            print(f"📝 Target: {target['id'][:30]}...")
             reply_text = get_ai_reply(target['text'])
             if not reply_text: continue
 
             try:
-                await target['element'].locator('[data-testid="reply"]').first.click()
-                await page.wait_for_selector('[data-testid="tweetTextarea_0"]', timeout=5000)
-                await human_type(page, '[data-testid="tweetTextarea_0"]', reply_text)
-                await page.click('[data-testid="tweetButtonInline"]')
+                # 1. Click Reply Icon
+                reply_icon = target['element'].locator('[data-testid="reply"]')
+                await reply_icon.first.click(timeout=5000)
                 
-                print(f"✅ Reply Sent: {reply_text}")
-                seen_posts[target['id']] = True
-                with open(SEEN_POSTS_FILE, 'w') as f: json.dump(seen_posts, f)
-                await asyncio.sleep(random.uniform(5, 10))
+                # 2. Find and Type in Textarea
+                textarea = page.locator('[data-testid="tweetTextarea_0"]')
+                await textarea.wait_for(state="visible", timeout=7000)
+                await human_type(page, '[data-testid="tweetTextarea_0"]', reply_text)
+                await asyncio.sleep(1)
+
+                # 3. Resilient Send Logic
+                # Tries both 'Inline' and standard 'Tweet' button labels
+                send_selectors = [
+                    '[data-testid="tweetButtonInline"]', 
+                    '[data-testid="tweetButton"]',
+                    '//span[text()="Reply"]/ancestor::div[@role="button"]',
+                    '//span[text()="Post"]/ancestor::div[@role="button"]'
+                ]
+                
+                for selector in send_selectors:
+                    btn = page.locator(selector)
+                    if await btn.is_visible():
+                        await btn.click()
+                        print(f"✅ Reply Sent: {reply_text}")
+                        seen_posts[target['id']] = True
+                        with open(SEEN_POSTS_FILE, 'w') as f: json.dump(seen_posts, f)
+                        break
+                
+                await asyncio.sleep(random.uniform(5, 8))
             except Exception as e:
-                print(f"⚠️ Interaction failed for one tweet: {e}")
+                print(f"⚠️ Interaction failed: {e}")
+                await page.keyboard.press("Escape") # Clear modal
 
         await browser.close()
         print("🏁 Run complete.")
