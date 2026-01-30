@@ -23,31 +23,28 @@ def sanitize_cookies(cookie_list):
         cleaned.append(cookie)
     return cleaned
 
-async def human_click(page, selector):
-    element = page.locator(selector).first
-    if await element.is_visible():
-        box = await element.bounding_box()
-        if box:
-            target_x = box['x'] + box['width'] * random.uniform(0.2, 0.8)
-            target_y = box['y'] + box['height'] * random.uniform(0.2, 0.8)
-            await page.mouse.move(target_x, target_y, steps=random.randint(8, 18))
-            await asyncio.sleep(random.uniform(0.1, 0.2))
-            await page.mouse.click(target_x, target_y)
+async def force_click(page, selector):
+    """Bypasses 'intercepted pointer events' by forcing the click action."""
+    try:
+        element = page.locator(selector).first
+        await element.scroll_into_view_if_needed()
+        # force=True ignores invisible layers sitting on top of the button
+        await element.click(force=True, timeout=5000)
+    except:
+        # Final fallback: Click via JavaScript injection
+        await page.evaluate(f'document.querySelector("{selector}").click()')
 
 async def human_type(page, selector, text):
-    await page.click(selector)
+    # We use force=True here too because the textarea was 'intercepted' in your logs
+    await page.locator(selector).click(force=True)
     for char in text:
-        if random.random() < 0.02:
-            await page.keyboard.press(random.choice('asdfghj'))
-            await asyncio.sleep(0.1)
-            await page.keyboard.press("Backspace")
         await page.keyboard.type(char)
-        await asyncio.sleep(random.uniform(0.04, 0.09))
+        await asyncio.sleep(random.uniform(0.04, 0.08))
 
 def get_ai_reply(tweet_text):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
-    prompt = f"Reply to: {tweet_text}. Max 15 words, lowercase. Style: Fact, Question or Wit (wit ends in ' lol'). Reply text only."
+    prompt = f"Reply to: {tweet_text}. Max 15 words, lowercase. Wit ends in ' lol'. Reply text only."
     try:
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json={"model": "google/gemini-2.0-flash-001", "messages": [{"role": "user", "content": prompt}]}, timeout=30.0)
@@ -73,7 +70,7 @@ async def run_bot():
 
         page = await context.new_page()
         print(f"📡 Loading List...")
-        await page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
+        await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
         await asyncio.sleep(5)
 
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
@@ -102,33 +99,30 @@ async def run_bot():
             if not reply_text: continue
 
             try:
-                await target['element'].scroll_into_view_if_needed()
-                await asyncio.sleep(1)
+                # 1. Open Reply Modal
+                reply_btn = target['element'].locator('[data-testid="reply"]').first
+                await reply_btn.click(force=True)
                 
-                # Try clicking Reply button
-                await human_click(page, '[data-testid="reply"]')
-                
-                # Check for textarea with longer timeout
-                try:
-                    textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                    await textarea.wait_for(state="visible", timeout=15000)
-                except:
-                    print("⚠️ Modal failed to open. Taking debug screenshot.")
-                    await page.screenshot(path="modal_timeout.png")
-                    await page.keyboard.press("Escape")
-                    continue
-
+                # 2. Type Reply
+                textarea = page.locator('[data-testid="tweetTextarea_0"]')
+                await textarea.wait_for(state="visible", timeout=10000)
                 await human_type(page, '[data-testid="tweetTextarea_0"]', reply_text)
                 await asyncio.sleep(1)
 
-                # Send
-                for sel in ['[data-testid="tweetButtonInline"]', '[data-testid="tweetButton"]', '//span[text()="Post"]']:
+                # 3. Send (Trying Force Click then Control+Enter)
+                sent = False
+                for sel in ['[data-testid="tweetButtonInline"]', '[data-testid="tweetButton"]']:
                     btn = page.locator(sel).first
                     if await btn.is_visible():
-                        await human_click(page, sel)
+                        await btn.click(force=True)
+                        sent = True
                         break
                 
-                # Verify
+                if not sent:
+                    # Backup: Press Ctrl + Enter to post
+                    await page.keyboard.press("Control+Enter")
+                
+                # 4. Verify
                 try:
                     await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=10000)
                     print(f"✅ Verified: {reply_text}")
