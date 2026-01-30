@@ -174,4 +174,4 @@ async def run_bot():
 
         # 3. SCAN & FILTER TWEETS
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
-        print(f"🔎 Scanned {len(tweet_elements)}
+        print(f"🔎 Scanned {len(tweet_elements)} tweets.")
