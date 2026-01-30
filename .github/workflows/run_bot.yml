@@ -2,8 +2,8 @@ name: X Bot Human
 
 on:
   schedule:
-    - cron: '*/45 * * * *' # Runs approx every 45 mins
-  workflow_dispatch:      # Allows manual trigger button
+    - cron: '*/45 * * * *' # Every 45 mins
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -19,33 +19,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # 1. Caches Python packages
+          cache: 'pip'
 
       - name: Install Dependencies
-        run: pip install playwright httpx fake-useragent
+        run: pip install -r requirements.txt
 
-      # 2. Cache Playwright Browser (Updated Key to force a refresh)
+      # Cache Browser to speed up runs
       - name: Cache Playwright
         uses: actions/cache@v4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-v2 # <--- Changed v1 to v2
+          key: ${{ runner.os }}-playwright-v2
       
-      - name: Install Playwright Browsers
+      - name: Install Playwright
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium --with-deps
 
-      # Add this specifically to ensure the "Headless Shell" is present
       - name: Ensure Headless Shell
         run: python -m playwright install chromium
 
-      # 3. Restore "Memory" (Prevents double posting)
-      - name: Restore Bot Memory
+      # MEMORY HANDLING: Restore old memory, Save new memory at end
+      - name: Bot Memory Cache
         uses: actions/cache@v4
         with:
           path: seen_posts.json
+          # Using run_id ensures a UNIQUE key for saving this run's data
           key: ${{ runner.os }}-memory-${{ github.run_id }}
+          # restore-keys finds the most recent cache with this prefix
           restore-keys: |
             ${{ runner.os }}-memory-
 
@@ -55,7 +56,6 @@ jobs:
           X_COOKIES: ${{ secrets.X_COOKIES }}
         run: python bot.py
 
-      # 4. Upload Debug Screenshots (Only if something fails)
       - name: Upload Debug Artifacts
         if: always()
         uses: actions/upload-artifact@v4
