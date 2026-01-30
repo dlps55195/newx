@@ -24,20 +24,21 @@ jobs:
       - name: Install Dependencies
         run: pip install playwright httpx fake-useragent
 
-      # 2. Cache Playwright Browser (Saves ~2 mins)
+      # 2. Cache Playwright Browser (Updated Key to force a refresh)
       - name: Cache Playwright
         uses: actions/cache@v4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-v1
+          key: ${{ runner.os }}-playwright-v2 # <--- Changed v1 to v2
       
-      - name: Install Playwright
+      - name: Install Playwright Browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium --with-deps
 
-      - name: Install Playwright deps (always needed)
-        run: python -m playwright install-deps chromium
+      # Add this specifically to ensure the "Headless Shell" is present
+      - name: Ensure Headless Shell
+        run: python -m playwright install chromium
 
       # 3. Restore "Memory" (Prevents double posting)
       - name: Restore Bot Memory
