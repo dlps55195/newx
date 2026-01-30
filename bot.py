@@ -1,138 +1,267 @@
-import os
-import json
-import asyncio
-import random
-import re
-import httpx
-from datetime import datetime, timezone, timedelta
-from fake_useragent import UserAgent
-from playwright.async_api import async_playwright
-
-# --- CONFIG ---
-LIST_URL = "https://x.com/i/lists/2011289206513930641"
-SEEN_POSTS_FILE = "seen_posts.json"
-AI_API_KEY = os.getenv("AI_API_KEY")
-
-def sanitize_cookies(cookie_list):
-    cleaned = []
-    for cookie in cookie_list:
-        if "sameSite" in cookie and cookie["sameSite"] not in ["Strict", "Lax", "None"]:
-            cookie["sameSite"] = "Lax"
-        cookie.pop("hostOnly", None)
-        cookie.pop("session", None)
-        cleaned.append(cookie)
-    return cleaned
-
-async def human_type(page, selector, text):
-    await page.click(selector)
-    for char in text:
-        if random.random() < 0.03:
-            await page.keyboard.press(random.choice('abcdefg'))
-            await asyncio.sleep(0.15)
-            await page.keyboard.press("Backspace")
-        await page.keyboard.type(char)
-        await asyncio.sleep(random.uniform(0.04, 0.10))
-
-def get_ai_reply(tweet_text):
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
-    prompt = f"Casual X reply (max 15 words, lowercase) for: {tweet_text}. No labels. End WIT with ' lol'."
-    try:
-        with httpx.Client() as client:
-            resp = client.post(url, headers=headers, json={"model": "google/gemini-2.0-flash-001", "messages": [{"role": "user", "content": prompt}]}, timeout=30.0)
-            return resp.json()['choices'][0]['message']['content'].strip() if resp.status_code == 200 else None
-    except: return None
-
-async def run_bot():
-    print("💓 Bot Start: Checking for fresh content...")
-    if not AI_API_KEY:
-        print("❌ CRITICAL: AI_API_KEY is missing.")
-        return
-
-    seen_posts = {}
-    if os.path.exists(SEEN_POSTS_FILE):
-        try:
-            with open(SEEN_POSTS_FILE, 'r') as f: seen_posts = json.load(f)
-        except: pass
-
-    async with async_playwright() as p:
-        print("🌐 Launching Stealth Browser...")
-        browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
-        context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1280, 'height': 800})
-        
-        cookie_raw = os.getenv("X_COOKIES")
-        if not cookie_raw:
-            print("❌ CRITICAL: X_COOKIES is empty.")
-            return
-        await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
-
-        page = await context.new_page()
-        print(f"📡 Navigating to List: {LIST_URL}")
-        await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(6) 
-
-        # Scan and filter
-        tweet_elements = await page.locator('article[data-testid="tweet"]').all()
-        candidates = []
-        five_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-
-        for tweet in tweet_elements:
-            try:
-                time_tag = tweet.locator("time")
-                if not await time_tag.count(): continue
-                iso_time = await time_tag.get_attribute("datetime")
-                tweet_time = datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
-                
-                if tweet_time > five_mins_ago:
-                    text_content = (await tweet.inner_text()).replace('\n', ' ')
-                    post_id = text_content[:80]
-                    if post_id not in seen_posts:
-                        candidates.append({"element": tweet, "text": text_content, "id": post_id})
-            except: continue
-
-        print(f"🎯 Candidates found: {len(candidates)}")
-        
-        for target in candidates[:3]:
-            print(f"📝 Target: {target['id'][:30]}...")
-            reply_text = get_ai_reply(target['text'])
-            if not reply_text: continue
-
-            try:
-                # 1. Click Reply Icon
-                reply_icon = target['element'].locator('[data-testid="reply"]')
-                await reply_icon.first.click(timeout=5000)
-                
-                # 2. Find and Type in Textarea
-                textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=7000)
-                await human_type(page, '[data-testid="tweetTextarea_0"]', reply_text)
-                await asyncio.sleep(1)
-
-                # 3. Resilient Send Logic
-                # Tries both 'Inline' and standard 'Tweet' button labels
-                send_selectors = [
-                    '[data-testid="tweetButtonInline"]', 
-                    '[data-testid="tweetButton"]',
-                    '//span[text()="Reply"]/ancestor::div[@role="button"]',
-                    '//span[text()="Post"]/ancestor::div[@role="button"]'
-                ]
-                
-                for selector in send_selectors:
-                    btn = page.locator(selector)
-                    if await btn.is_visible():
-                        await btn.click()
-                        print(f"✅ Reply Sent: {reply_text}")
-                        seen_posts[target['id']] = True
-                        with open(SEEN_POSTS_FILE, 'w') as f: json.dump(seen_posts, f)
-                        break
-                
-                await asyncio.sleep(random.uniform(5, 8))
-            except Exception as e:
-                print(f"⚠️ Interaction failed: {e}")
-                await page.keyboard.press("Escape") # Clear modal
-
-        await browser.close()
-        print("🏁 Run complete.")
-
-if __name__ == "__main__":
-    asyncio.run(run_bot())
+[
+{
+    "domain": ".x.com",
+    "expirationDate": 1769799324.658517,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "__cf_bm",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "n9m3E0lwpS.WTMGGmtb_7riMtf5XsgXq6S5.qTX5Fp8-1769797524.7919657-1.0.1.1-mey5cbTLrtco6M_tTYihJGk8iAEZtu4PIwV_3gdv7r32EduO2xT1OiSJT8eWKcUdaJL7PZRCo_ib_z8fYpZJzYsHPF2p_fn6uxB_57QEkZlm.4Ono42.DRegxr3zZpez",
+    "id": 1
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357440,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "__cuid",
+    "path": "/",
+    "sameSite": "lax",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "83df106abc4a48f0818fc7ee7d87683d",
+    "id": 2
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804178232.665807,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "GA1.1.276745909.1766394346",
+    "id": 3
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1803478951.975275,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga_8F877BKNHF",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "GS2.1.s1768918932$o1$g1$t1768918951$j41$l0$h0",
+    "id": 4
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1803006787.801772,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga_BLY4P7T5KW",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "GS2.1.s1768446706$o3$g1$t1768446787$j60$l0$h0",
+    "id": 5
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804178232.664922,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "_ga_RJGMY4G45L",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "GS2.1.s1769618232$o1$g0$t1769618232$j60$l0$h0",
+    "id": 6
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1769883839.572901,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "att",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "1-XgNxISe5XkjpNMfya6zsxxcfEzYVSFGQgrMYt9wi",
+    "id": 7
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357438.883661,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "auth_token",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "f09cbb3f97b651e95b1a494377fd2378694525aa",
+    "id": 8
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357439.175541,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "ct0",
+    "path": "/",
+    "sameSite": "lax",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "174b69007d59ddb6d9905b3b83c5819658be18be528a6b94412fd63e70355876a028a76ac2b647f8f9e89eda46cddd958438928030eb8353894c986a19cd85ec87195a73dde735fdb03272aa77a188c3",
+    "id": 9
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357421.80485,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "dnt",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "1",
+    "id": 10
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1769806422.253633,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "gt",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "2017302718126104841",
+    "id": 11
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357422.098363,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "guest_id",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "v1%3A176979742230806105",
+    "id": 12
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357442.220854,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "guest_id_ads",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "v1%3A176979742230806105",
+    "id": 13
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357442.221258,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "guest_id_marketing",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "v1%3A176979742230806105",
+    "id": 14
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357438.883114,
+    "hostOnly": false,
+    "httpOnly": true,
+    "name": "kdt",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "WX2WMpeW8qNO9sGTlJozPATdC4oCk47sEQco7whk",
+    "id": 15
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1804357422.253318,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "personalization_id",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "\"v1_tD8/b/XRjZVKqYECWx8pnA==\"",
+    "id": 16
+},
+{
+    "domain": ".x.com",
+    "expirationDate": 1801333442.22145,
+    "hostOnly": false,
+    "httpOnly": false,
+    "name": "twid",
+    "path": "/",
+    "sameSite": "no_restriction",
+    "secure": true,
+    "session": false,
+    "storeId": "0",
+    "value": "u%3D1717573760868294656",
+    "id": 17
+},
+{
+    "domain": "x.com",
+    "expirationDate": 1785349437,
+    "hostOnly": true,
+    "httpOnly": false,
+    "name": "g_state",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": false,
+    "storeId": "0",
+    "value": "{\"i_l\":0,\"i_ll\":1769797431632}",
+    "id": 18
+},
+{
+    "domain": "x.com",
+    "hostOnly": true,
+    "httpOnly": false,
+    "name": "lang",
+    "path": "/",
+    "sameSite": "unspecified",
+    "secure": false,
+    "session": true,
+    "storeId": "0",
+    "value": "en",
+    "id": 19
+}
+]
