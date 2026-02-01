@@ -169,56 +169,60 @@ async def run_bot():
 
         print(f"🎯 Fresh Candidates: {len(candidates)}")
         
-        # 4. Execution Loop
+        # REPLACE YOUR ENTIRE 'for target in candidates' LOOP WITH THIS:
         for target in candidates[:3]:
             if target['id'] in seen_ids: continue
             
-            print(f"📝 Analyzing post by {target['data']['author']}...")
             reply_text = get_ai_reply(target['data'])
+            if not reply_text: continue
             
-            if not reply_text: 
-                print("⚠️ AI declined to generate reply.")
-                continue
-            
-            print(f"🤖 Strategy Generated: {reply_text}")
+            print(f"📝 Target: {target['data']['author']} | Strategy: {reply_text[:30]}...")
 
             try:
-                # A. Open Reply Modal (Force Click)
+                # 1. Open Reply
                 await target['element'].locator('[data-testid="reply"]').first.click(force=True)
-                
-                # B. Wait for Textarea
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=12000)
+                await textarea.wait_for(state="visible", timeout=10000)
                 
-                # C. Type Reply
+                # 2. Type with human-like variance
                 await textarea.click(force=True)
-                await page.keyboard.type(reply_text)
-                await asyncio.sleep(random.uniform(1.5, 3.0))
+                await page.keyboard.type(reply_text, delay=random.randint(50, 100))
+                await asyncio.sleep(2)
                 
-                # D. Send (Priority: Button -> Keyboard)
-                sent = False
-                post_btn = page.locator('[data-testid="tweetButtonInline"]').first
-                if await post_btn.is_visible():
-                    await post_btn.click(force=True)
-                    sent = True
-                
-                if not sent:
-                    await page.keyboard.press("Control+Enter")
-                
-                # E. Verification (The Gatekeeper)
-                try:
-                    await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=15000)
-                    print(f"✅ Verified & Saved: {target['id']}")
+                # 3. THE AGGRESSIVE SEND LOOP
+                # We try clicking AND hitting Ctrl+Enter until the box disappears
+                verified = False
+                for attempt in range(3):
+                    # Try the button first
+                    post_btn = page.locator('[data-testid="tweetButtonInline"]').first
+                    if await post_btn.is_visible():
+                        await post_btn.click(force=True)
                     
-                    # Save to Memory
+                    # Backup: Immediate Keyboard Send
+                    await page.keyboard.press("Control+Enter")
+                    
+                    # Wait 3 seconds to see if the modal closes
+                    try:
+                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=3000)
+                        verified = True
+                        break
+                    except:
+                        print(f"🔄 Retry {attempt + 1}: Modal still open...")
+                        await asyncio.sleep(1)
+
+                if verified:
+                    print(f"✅ Success: {target['id']}")
                     seen_ids.add(target['id'])
                     with open(SEEN_POSTS_FILE, 'w') as f:
                         json.dump(list(seen_ids), f)
-                except:
+                else:
+                    # If it fails after 3 tries, take a screenshot and escape
                     print(f"❌ Verification Failed for {target['id']}")
+                    await page.screenshot(path=f"fail_{target['id']}.png")
                     await page.keyboard.press("Escape")
 
-                await asyncio.sleep(random.uniform(15, 30))
+                # Randomized "Cooldown" to prevent rate-limiting
+                await asyncio.sleep(random.uniform(25, 45))
 
             except Exception as e:
                 print(f"⚠️ Interaction Error: {e}")
