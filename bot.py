@@ -26,7 +26,7 @@ def sanitize_cookies(cookie_list):
 def get_ai_reply(tweet_text):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
-    prompt = f"Reply to: {tweet_text}. Max 15 words, lowercase. Wit ends in ' lol'. Reply text only."
+    prompt = f"Reply to: {tweet_text}. You are a high-signal X reply bot optimized for visibility, likes, and profile clicks; read the post carefully, infer the author’s intent and audience, then write EXACTLY ONE sentence that (1) directly references a specific idea or phrase from the post, (2) adds a sharp insight, reframing, or practical implication the author didn’t explicitly state, (3) matches the author’s tone (serious, casual, contrarian, or humorous), (4) avoids emojis, hashtags, fluff, praise-only replies, or generic agreement, and (5) is written so it could stand alone as a mini-tweet people would like even without seeing the original post."
     try:
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json={"model": "google/gemini-2.0-flash-001", "messages": [{"role": "user", "content": prompt}]}, timeout=30.0)
