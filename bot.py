@@ -68,6 +68,7 @@ def get_ai_reply(tweet_data):
     - DO NOT include your analysis, reasoning, or technical thinking.
     - DO NOT include labels like "Expert:", "Wit:", or "Reply:".
     - Output ONLY the raw response text intended for the tweet.
+    -Only use end in ' lol' when the post's "Semantic Vector" is "WIT".
     """
     
     try:
