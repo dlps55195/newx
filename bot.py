@@ -27,14 +27,11 @@ def sanitize_cookies(cookie_list):
 
 # --- THE STRATEGIC AI BRAIN ---
 def get_ai_reply(tweet_data):
-    """
-    Inputs: Dictionary with 'text', 'author', and 'media_desc'.
-    Action: Uses the locked 'Super Prompt' to classify and generate a reply.
-    """
+    """Uses the Locked Super Prompt with a strict 'No-Thinking' output filter."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
-    # --- THE 2026 SUPER PROMPT (WORD FOR WORD) ---
+    # THE REFACTORED SUPER PROMPT
     system_instruction = f"""
     [SYSTEM ROLE]
     You are a 2026 X Growth Strategist specialized in "Semantic Authority" and "Dwell Time". 
@@ -68,7 +65,9 @@ def get_ai_reply(tweet_data):
     [STRICT OUTPUT RULES]
     - Max 18 words.
     - NO hashtags. NO emojis.
-    - Output ONLY the reply text. Do not write "Expert:" or "Reply:".
+    - DO NOT include your analysis, reasoning, or technical thinking.
+    - DO NOT include labels like "Expert:", "Wit:", or "Reply:".
+    - Output ONLY the raw response text intended for the tweet.
     """
     
     try:
@@ -76,15 +75,13 @@ def get_ai_reply(tweet_data):
             "model": "google/gemini-2.0-flash-001",
             "messages": [{"role": "user", "content": system_instruction}]
         }
-        
         with httpx.Client() as client:
             resp = client.post(url, headers=headers, json=payload, timeout=30.0)
             if resp.status_code == 200:
                 content = resp.json()['choices'][0]['message']['content'].strip()
-                # Clean up any labels the AI might accidentally leave
-                clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply):\s*', '', content, flags=re.IGNORECASE)
-                clean_text = clean_text.replace('"', '').replace("'", "")
-                return clean_text
+                # Secondary safety strip for labels and quotes
+                clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply|Analysis|Vector):\s*', '', content, flags=re.IGNORECASE)
+                return clean_text.replace('"', '').replace("'", "")
             return None
     except Exception:
         return None
