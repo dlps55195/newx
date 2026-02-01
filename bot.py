@@ -116,7 +116,10 @@ async def run_bot():
 
         page = await context.new_page()
         print(f"📡 Loading Feed...")
-        await page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
+       # domcontentloaded is much faster and won't hang on background analytics
+await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
+# Give the dynamic content (tweets) 5-8 seconds to actually render
+await asyncio.sleep(8)
         await asyncio.sleep(8)
 
         # 2. Scrape & Filter
