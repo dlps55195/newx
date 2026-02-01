@@ -29,12 +29,12 @@ def sanitize_cookies(cookie_list):
 def get_ai_reply(tweet_data):
     """
     Inputs: Dictionary with 'text', 'author', and 'media_desc'.
-    Action: Uses the 'Super Prompt' to classify and generate a high-dwell-time reply.
+    Action: Uses the locked 'Super Prompt' to classify and generate a reply.
     """
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
-    # THE 2026 SUPER PROMPT
+    # --- THE LOCKED 2026 SUPER PROMPT ---
     system_instruction = f"""
     [SYSTEM ROLE]
     You are a 2026 X Growth Strategist specialized in "Semantic Authority" and "Dwell Time". 
@@ -81,22 +81,20 @@ def get_ai_reply(tweet_data):
             resp = client.post(url, headers=headers, json=payload, timeout=30.0)
             if resp.status_code == 200:
                 content = resp.json()['choices'][0]['message']['content'].strip()
-                # Clean up any quotes or labels the AI might accidentally leave
+                # Clean up any labels the AI might accidentally leave
                 clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply):\s*', '', content, flags=re.IGNORECASE)
                 clean_text = clean_text.replace('"', '').replace("'", "")
                 return clean_text
-            else:
-                print(f"⚠️ AI API Error: {resp.status_code}")
-                return None
+            return None
     except Exception as e:
         print(f"⚠️ AI Request Failed: {e}")
         return None
 
 # --- MAIN BOT LOOP ---
 async def run_bot():
-    print("💓 Bot Start: Semantic Engine Active")
+    print("💓 Bot Start: Resilient Engine Active")
     
-    # 1. Memory Load
+    # 1. Load Memory
     seen_ids = set()
     if os.path.exists(SEEN_POSTS_FILE):
         try:
@@ -107,9 +105,10 @@ async def run_bot():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
-        context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1280, 'height': 800})
         
-        # 2. Authentication
+        # OPTIMIZATION: Large viewport to prevent "element outside viewport" errors
+        context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1920, 'height': 1080})
+        
         try:
             cookie_raw = os.getenv("X_COOKIES")
             if not cookie_raw: return
@@ -119,110 +118,107 @@ async def run_bot():
         page = await context.new_page()
         print(f"📡 Loading Feed...")
         await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(6)
+        await asyncio.sleep(8)
 
-        # 3. Enhanced Scraping (Text + Image Alt)
+        # 2. Scrape & Filter
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
         candidates = []
-        five_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+        five_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=15) # Extended window for safety
 
         for tweet in tweet_elements:
             try:
-                # Get Unique ID
                 link_element = tweet.locator('a[href*="/status/"]').first
                 tweet_url = await link_element.get_attribute("href")
                 unique_id = tweet_url.split('/')[-1] if tweet_url else None
                 
-                # Get Timestamp
                 time_tag = tweet.locator("time")
                 if not await time_tag.count(): continue
                 tweet_time = datetime.fromisoformat((await time_tag.get_attribute("datetime")).replace("Z", "+00:00"))
                 
                 if unique_id and unique_id not in seen_ids and tweet_time > five_mins_ago:
-                    # Get Text
                     text_content = (await tweet.inner_text()).replace('\n', ' ')
                     
-                    # Get Author Handle
                     author_elem = tweet.locator('div[dir="ltr"] > span').first
                     author_name = await author_elem.inner_text() if await author_elem.count() else "Unknown"
                     
-                    # Get Image Context (Crucial for the AI)
+                    # OPTIMIZATION: Alt text scraper
                     media_desc = "No media"
                     img_elem = tweet.locator('div[data-testid="tweetPhoto"] img').first
                     if await img_elem.count() > 0:
-                        alt_text = await img_elem.get_attribute("alt")
-                        if alt_text: 
-                            media_desc = f"Image shows: {alt_text}"
-                        else:
-                            media_desc = "Image present but no description available."
+                        alt = await img_elem.get_attribute("alt")
+                        media_desc = f"Image content: {alt}" if alt else "Image present (no alt text)"
 
                     candidates.append({
                         "element": tweet, 
-                        "data": {
-                            "text": text_content, 
-                            "author": author_name,
-                            "media_desc": media_desc
-                        },
+                        "data": {"text": text_content, "author": author_name, "media_desc": media_desc},
                         "id": unique_id
                     })
             except: continue
 
-        print(f"🎯 Fresh Candidates: {len(candidates)}")
-        
-        # REPLACE YOUR ENTIRE 'for target in candidates' LOOP WITH THIS:
+        print(f"🎯 Candidates Found: {len(candidates)}")
+
+        # 3. Execution Loop (The Robust Part)
         for target in candidates[:3]:
             if target['id'] in seen_ids: continue
             
+            print(f"📝 Analyzing {target['data']['author']}...")
             reply_text = get_ai_reply(target['data'])
-            if not reply_text: continue
             
-            print(f"📝 Target: {target['data']['author']} | Strategy: {reply_text[:30]}...")
+            if not reply_text: continue
+            print(f"🤖 Strategy: {reply_text}")
 
             try:
-                # 1. Open Reply
-                await target['element'].locator('[data-testid="reply"]').first.click(force=True)
-                textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=10000)
+                # OPTIMIZATION: Scroll target into center view
+                await target['element'].scroll_into_view_if_needed()
+                await asyncio.sleep(1)
+
+                # Open Reply
+                reply_btn = target['element'].locator('[data-testid="reply"]').first
+                await reply_btn.click(force=True)
                 
-                # 2. Type with human-like variance
+                textarea = page.locator('[data-testid="tweetTextarea_0"]')
+                await textarea.wait_for(state="visible", timeout=12000)
+                
+                # Type with human speed
                 await textarea.click(force=True)
-                await page.keyboard.type(reply_text, delay=random.randint(50, 100))
+                await page.keyboard.type(reply_text, delay=random.randint(30, 80))
                 await asyncio.sleep(2)
                 
-                # 3. THE AGGRESSIVE SEND LOOP
-                # We try clicking AND hitting Ctrl+Enter until the box disappears
+                # OPTIMIZATION: The "Aggressive Send" Loop
                 verified = False
                 for attempt in range(3):
-                    # Try the button first
                     post_btn = page.locator('[data-testid="tweetButtonInline"]').first
+                    
+                    # Wake up disabled button
+                    if await post_btn.is_visible() and await post_btn.get_attribute("aria-disabled") == "true":
+                        await page.keyboard.press("Space")
+                        await asyncio.sleep(1)
+
+                    # Try click
                     if await post_btn.is_visible():
                         await post_btn.click(force=True)
                     
-                    # Backup: Immediate Keyboard Send
+                    # Try Hotkey Backup
                     await page.keyboard.press("Control+Enter")
                     
-                    # Wait 3 seconds to see if the modal closes
+                    # Check success
                     try:
-                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=3000)
+                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=4000)
                         verified = True
                         break
                     except:
-                        print(f"🔄 Retry {attempt + 1}: Modal still open...")
+                        print(f"🔄 Retry {attempt+1}...")
                         await asyncio.sleep(1)
 
                 if verified:
-                    print(f"✅ Success: {target['id']}")
+                    print(f"✅ Verified & Saved: {target['id']}")
                     seen_ids.add(target['id'])
-                    with open(SEEN_POSTS_FILE, 'w') as f:
-                        json.dump(list(seen_ids), f)
+                    with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
                 else:
-                    # If it fails after 3 tries, take a screenshot and escape
-                    print(f"❌ Verification Failed for {target['id']}")
-                    await page.screenshot(path=f"fail_{target['id']}.png")
+                    print(f"❌ Verification Failed: {target['id']}")
                     await page.keyboard.press("Escape")
 
-                # Randomized "Cooldown" to prevent rate-limiting
-                await asyncio.sleep(random.uniform(25, 45))
+                await asyncio.sleep(random.uniform(20, 40))
 
             except Exception as e:
                 print(f"⚠️ Interaction Error: {e}")
