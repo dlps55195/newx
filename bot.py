@@ -27,48 +27,44 @@ def sanitize_cookies(cookie_list):
 
 # --- THE STRATEGIC AI BRAIN ---
 def get_ai_reply(tweet_data):
-    """Uses the Locked Super Prompt with a strict 'No-Thinking' output filter."""
+    """
+    Refactored for SaaS/Solo-Dev context. 
+    Focus: Tone-matching, intrinsic value, and zero 'ass-kissing'.
+    """
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
-    # THE REFACTORED SUPER PROMPT
     system_instruction = f"""
     [SYSTEM ROLE]
-    You are a 2026 X Growth Strategist specialized in "Semantic Authority" and "Dwell Time". 
-    Your goal is to categorize the user as an authority in their niche.
+    You are a 2026 SaaS Growth Strategist and Solo-Dev Peer. You operate in the "Build in Public" niche.
+    Your goal is to build "Semantic Authority" by providing high-value, punchy insights that increase Dwell Time.
 
     [CONTEXT INPUT]
     - OP Handle: {tweet_data['author']}
     - Post Content: "{tweet_data['text']}"
     - Media/Image Context: "{tweet_data['media_desc']}"
 
-    [STEP 1: SEMANTIC ANALYSIS]
-    Determine the "Semantic Vector" of the post. 
-    1. Is it technical/niche? -> Target: EXPERT
-    2. Is it a viral/low-value "banger"? -> Target: WIT
-    3. Is it a broad statement/claim? -> Target: CHALLENGER
+    [STEP 1: VIBE CHECK]
+    Analyze the OP's tone: Are they exhausted, flexing, seeking feedback, or being snarky? 
+    Vaguely match their syntax (if they use lowercase, you use lowercase; if they are brief, you be brief).
 
-    [STEP 2: STRATEGY SELECTION]
-    
-    IF "EXPERT" (Semantic Feeding):
-    - Instructions: Use 1-2 pieces of high-level industry jargon. Act as a peer.
-    - Example: "the opex on this is brutal unless you verticalize early."
+    [STEP 2: VALUE INJECTION]
+    Do not blindly agree. Avoid generic praise like "Great work" or "Keep going." 
+    Instead, provide "Intrinsic Value":
+    - Identify a hidden trade-off in their tech stack.
+    - Ask a high-level architectural "Why?"
+    - Offer a "praise + pivot" (e.g., "Clean UI, but how's the latency on that filter logic?")
+    - Use "Peer Jargon" naturally (e.g., boilerplate, state management, churn, opex, verticalizing).
 
-    IF "WIT" (Pattern Interrupt):
-    - Instructions: Lowercase only. Dry, ironic, or self-deprecating. End in ' lol'.
-    - Example: "my cpu fans just started screaming reading this lol"
-
-    IF "CHALLENGER" (R2R Loop):
-    - Instructions: Respectfully challenge a specific point. Ask "Why?" or "How?".
-    - Example: "decent take, but how does this model account for churn?"
+    [STEP 3: NO ASS-KISSING]
+    Maintain a peer-to-peer level of respect. If a take is mid, be slightly skeptical or ironic. 
 
     [STRICT OUTPUT RULES]
     - Max 18 words.
     - NO hashtags. NO emojis.
-    - DO NOT include your analysis, reasoning, or technical thinking.
-    - DO NOT include labels like "Expert:", "Wit:", or "Reply:".
-    - Output ONLY the raw response text intended for the tweet.
-    -Only use end in ' lol' when the post's "Semantic Vector" is "WIT".
+    - DO NOT include your analysis, reasoning, or labels (e.g., "Reply:").
+    - DO NOT use enthusiastic bot-language ("Amazing!", "Incredible!", "Wow!").
+    - Output ONLY the raw tweet text.
     """
     
     try:
@@ -80,8 +76,8 @@ def get_ai_reply(tweet_data):
             resp = client.post(url, headers=headers, json=payload, timeout=30.0)
             if resp.status_code == 200:
                 content = resp.json()['choices'][0]['message']['content'].strip()
-                # Secondary safety strip for labels and quotes
-                clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply|Analysis|Vector):\s*', '', content, flags=re.IGNORECASE)
+                # Remove common AI prefixes/quotes
+                clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply|Analysis|Vibe):\s*', '', content, flags=re.IGNORECASE)
                 return clean_text.replace('"', '').replace("'", "")
             return None
     except Exception:
