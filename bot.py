@@ -4,7 +4,7 @@ import asyncio
 import random
 import re
 import httpx
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from fake_useragent import UserAgent
 from playwright.async_api import async_playwright
 
@@ -13,6 +13,28 @@ LIST_URL = "https://x.com/i/lists/2011289206513930641"
 SEEN_POSTS_FILE = "seen_posts.json"
 AI_API_KEY = os.getenv("AI_API_KEY")
 
+# --- DEBUGGING FUNCTION ---
+async def log_debug_state(page, unique_id, stage):
+    """Captures a screenshot and dumps element states for deep forensics."""
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"debug_{unique_id}_{timestamp}_{stage}.png"
+    await page.screenshot(path=filename)
+    print(f"🔍 [DEBUG: {stage}] Saved screenshot: {filename}")
+    
+    post_btn = page.locator('[data-testid="tweetButtonInline"]').first
+    if await post_btn.count() > 0:
+        attrs = await post_btn.evaluate("""el => {
+            return {
+                aria_disabled: el.getAttribute('aria-disabled'),
+                visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+                rect: el.getBoundingClientRect()
+            }
+        }""")
+        print(f"📊 [ELEMENT STATE]: {attrs}")
+    else:
+        print("📊 [ELEMENT STATE]: Post button NOT FOUND in DOM.")
+
+# --- UTILS & AI ---
 def sanitize_cookies(cookie_list):
     cleaned = []
     for cookie in cookie_list:
@@ -23,15 +45,11 @@ def sanitize_cookies(cookie_list):
         cleaned.append(cookie)
     return cleaned
 
-# --- THE STRATEGIC AI BRAIN ---
 def get_ai_reply(tweet_data):
-    """
-    Refactored for SaaS/Solo-Dev context. 
-    Focus: Tone-matching, intrinsic value, and zero 'ass-kissing'.
-    """
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
+    # PROMPT (WORD FOR WORD AS REQUESTED)
     system_instruction = f"""
     [SYSTEM ROLE]
     You are a 2026 SaaS Growth Strategist and Solo-Dev Peer. You operate in the "Build in Public" niche.
@@ -43,8 +61,8 @@ def get_ai_reply(tweet_data):
     - Media/Image Context: "{tweet_data['media_desc']}"
 
     [STEP 1: VIBE CHECK]
-    Analyze the OP's tone: Are they exhausted, flexing, seeking feedback, etc.? 
-    Vaguely match their syntax (if they use lowercase, you use lowercase; if they are brief, you be brief; if they use simple wording, you use simple wording).
+    Analyze the OP's tone: Are they exhausted, flexing, seeking feedback, or being snarky? 
+    Vaguely match their syntax (if they use lowercase, you use lowercase; if they are brief, you be brief).
 
     [STEP 2: VALUE INJECTION]
     Do not blindly agree. Avoid generic praise like "Great work" or "Keep going." 
@@ -52,7 +70,7 @@ def get_ai_reply(tweet_data):
     - Identify a hidden trade-off in their tech stack.
     - Ask a high-level architectural "Why?"
     - Offer a "praise + pivot" (e.g., "Clean UI, but how's the latency on that filter logic?")
-    - Use "Tech Jargon" naturally, but make sure your reply can be easily understood (use simple but effective sentence structure).
+    - Use "Peer Jargon" naturally (e.g., boilerplate, state management, churn, opex, verticalizing).
 
     [STEP 3: NO ASS-KISSING]
     Maintain a peer-to-peer level of respect. If a take is mid, be slightly skeptical or ironic. 
@@ -64,7 +82,7 @@ def get_ai_reply(tweet_data):
     - DO NOT use enthusiastic bot-language ("Amazing!", "Incredible!", "Wow!").
     - Output ONLY the raw tweet text.
     """
-
+    
     try:
         payload = {
             "model": "google/gemini-2.0-flash-001",
@@ -79,6 +97,7 @@ def get_ai_reply(tweet_data):
             return None
     except: return None
 
+# --- RUN BOT ---
 async def run_bot():
     print("💓 Bot Start: Resilient Engine Active")
     seen_ids = set()
@@ -93,11 +112,9 @@ async def run_bot():
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
         context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1920, 'height': 1080})
         
-        try:
-            cookie_raw = os.getenv("X_COOKIES")
-            if not cookie_raw: return
-            await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
-        except: return
+        cookie_raw = os.getenv("X_COOKIES")
+        if not cookie_raw: return
+        await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
 
         page = await context.new_page()
         print(f"📡 Loading Feed...")
@@ -119,8 +136,6 @@ async def run_bot():
                     candidates.append({"element": tweet, "data": {"text": text, "author": author, "media_desc": "No media"}, "id": unique_id})
             except: continue
 
-        print(f"🎯 Candidates: {len(candidates)}")
-
         for target in candidates[:3]:
             reply_text = get_ai_reply(target['data'])
             if not reply_text: continue
@@ -130,40 +145,40 @@ async def run_bot():
                 await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'auto'})")
                 await asyncio.sleep(2)
 
-                # Open Reply
-                reply_btn = target['element'].locator('[data-testid="reply"]').first
-                await reply_btn.click(force=True)
-                
+                await target['element'].locator('[data-testid="reply"]').first.click(force=True)
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
                 await textarea.wait_for(state="visible", timeout=12000)
                 await textarea.click()
                 await page.keyboard.type(reply_text, delay=random.randint(50, 100))
                 
-                # FORCE ACTIVATION
                 await textarea.dispatch_event("input")
                 await page.keyboard.press("Space")
                 await page.keyboard.press("Backspace")
-                await asyncio.sleep(3) # Vital: Let X finish 'saving draft' background process
+                await asyncio.sleep(3) 
 
                 verified = False
                 for attempt in range(3):
-                    # 1. Primary: The Command-Enter Hotkey
+                    # 1. LOG STATE BEFORE ATTEMPT
+                    await log_debug_state(page, target['id'], f"attempt_{attempt}")
+
+                    # 2. SUBMISSION ATTEMPT (Hotkey)
                     await page.keyboard.press("Control+Enter")
                     await asyncio.sleep(2)
 
-                    # 2. Secondary: Tab Navigation (Harder to block than clicks)
+                    # 3. VERIFY & FALLBACK
                     if await page.locator('[data-testid="tweetTextarea_0"]').is_visible():
-                        print(f"🔄 Attempt {attempt+1}: Keyboard Navigation...")
+                        print(f"🔄 Attempt {attempt+1}: Keyboard Navigation Fallback...")
                         await page.keyboard.press("Tab")
                         await asyncio.sleep(0.5)
                         await page.keyboard.press("Enter")
-
+                    
                     try:
+                        # Success check: Wait for the composer to disappear
                         await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=4000)
                         verified = True
                         break
                     except:
-                        # 3. Last Resort: Physical Coordinate Click
+                        # 4. FINAL FALLBACK: Coordinate Click
                         post_btn = page.locator('[data-testid="tweetButtonInline"]').first
                         box = await post_btn.bounding_box()
                         if box:
@@ -176,11 +191,12 @@ async def run_bot():
                     with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
                 else:
                     print(f"❌ Verification Failed: {target['id']}")
+                    await log_debug_state(page, target['id'], "FINAL_FAILURE")
                     await page.keyboard.press("Escape")
 
                 await asyncio.sleep(random.uniform(25, 40))
             except Exception as e:
-                print(f"⚠️ Error: {e}")
+                print(f"⚠️ Interaction Error: {e}")
                 await page.keyboard.press("Escape")
 
         await browser.close()
