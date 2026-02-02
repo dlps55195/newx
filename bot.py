@@ -13,9 +13,7 @@ LIST_URL = "https://x.com/i/lists/2011289206513930641"
 SEEN_POSTS_FILE = "seen_posts.json"
 AI_API_KEY = os.getenv("AI_API_KEY")
 
-# --- UTILS ---
 def sanitize_cookies(cookie_list):
-    """Ensures cookie compatibility to prevent browser crashes."""
     cleaned = []
     for cookie in cookie_list:
         if "sameSite" in cookie and cookie["sameSite"] not in ["Strict", "Lax", "None"]:
@@ -76,162 +74,117 @@ def get_ai_reply(tweet_data):
             resp = client.post(url, headers=headers, json=payload, timeout=30.0)
             if resp.status_code == 200:
                 content = resp.json()['choices'][0]['message']['content'].strip()
-                # Secondary safety strip for labels and quotes
-                clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply|Analysis|Vector):\s*', '', content, flags=re.IGNORECASE)
+                clean_text = re.sub(r'^(Expert|Wit|Challenger|Reply|Analysis|Vibe|Strategy):\s*', '', content, flags=re.IGNORECASE)
                 return clean_text.replace('"', '').replace("'", "")
             return None
-    except Exception:
-        return None
+    except: return None
 
-# --- MAIN BOT LOOP ---
 async def run_bot():
     print("💓 Bot Start: Resilient Engine Active")
-
-    # 1. Load Memory
     seen_ids = set()
     if os.path.exists(SEEN_POSTS_FILE):
         try:
             with open(SEEN_POSTS_FILE, 'r') as f:
                 data = json.load(f)
                 seen_ids = set(data) if isinstance(data, list) else set(data.keys())
-        except Exception:
-            pass
+        except: pass
 
     async with async_playwright() as p:
-        # Optimization: Launch settings
         browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
         context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1920, 'height': 1080})
-
+        
         try:
             cookie_raw = os.getenv("X_COOKIES")
-            if not cookie_raw: 
-                print("❌ No Cookies Found")
-                return
+            if not cookie_raw: return
             await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
-        except Exception as e:
-            print(f"❌ Cookie Error: {e}")
-            return
+        except: return
 
         page = await context.new_page()
         print(f"📡 Loading Feed...")
-
-        # Navigation Fix: Use domcontentloaded to avoid networkidle timeout
         await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(10) # Wait for JS-rendered tweets to appear
+        await asyncio.sleep(12) 
 
-        # 2. Scrape & Filter
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
         candidates = []
         now = datetime.now(timezone.utc)
 
         for tweet in tweet_elements:
             try:
-                link_element = tweet.locator('a[href*="/status/"]').first
-                tweet_url = await link_element.get_attribute("href")
+                link = tweet.locator('a[href*="/status/"]').first
+                tweet_url = await link.get_attribute("href")
                 unique_id = tweet_url.split('/')[-1] if tweet_url else None
+                if unique_id and unique_id not in seen_ids:
+                    text = (await tweet.inner_text()).replace('\n', ' ')
+                    author = await tweet.locator('div[dir="ltr"] > span').first.inner_text()
+                    candidates.append({"element": tweet, "data": {"text": text, "author": author, "media_desc": "No media"}, "id": unique_id})
+            except: continue
 
-                time_tag = tweet.locator("time")
-                if not await time_tag.count(): 
-                    continue
-                tweet_time = datetime.fromisoformat((await time_tag.get_attribute("datetime")).replace("Z", "+00:00"))
+        print(f"🎯 Candidates: {len(candidates)}")
 
-                # Check 20-minute window
-                if unique_id and unique_id not in seen_ids and (now - tweet_time).total_seconds() < 1200:
-                    text_content = (await tweet.inner_text()).replace('\n', ' ')
-
-                    author_elem = tweet.locator('div[dir="ltr"] > span').first
-                    author_name = await author_elem.inner_text() if await author_elem.count() else "Unknown"
-
-                    # Alt text scraper
-                    media_desc = "No media"
-                    img_elem = tweet.locator('div[data-testid="tweetPhoto"] img').first
-                    if await img_elem.count() > 0:
-                        alt = await img_elem.get_attribute("alt")
-                        media_desc = f"Image content: {alt}" if alt else "Image present"
-
-                    candidates.append({
-                        "element": tweet, 
-                        "data": {"text": text_content, "author": author_name, "media_desc": media_desc},
-                        "id": unique_id
-                    })
-            except Exception:
-                continue
-
-        print(f"🎯 Candidates Found: {len(candidates)}")
-
-        # 3. Interaction Loop
         for target in candidates[:3]:
-            if target['id'] in seen_ids: 
-                continue
-
-            print(f"📝 Analyzing {target['data']['author']}...")
             reply_text = get_ai_reply(target['data'])
-
-            if not reply_text: 
-                continue
-            print(f"🤖 Strategy: {reply_text}")
+            if not reply_text: continue
+            print(f"📝 Target: {target['data']['author']} | Strategy: {reply_text}")
 
             try:
-                # OPTIMIZATION: Center-Lock Scroll
-                await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'smooth'})")
+                await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'auto'})")
                 await asyncio.sleep(2)
 
-                # Open Reply Modal
+                # Open Reply
                 reply_btn = target['element'].locator('[data-testid="reply"]').first
                 await reply_btn.click(force=True)
-
+                
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
                 await textarea.wait_for(state="visible", timeout=12000)
-
-                # FOCUS AND TYPE
-                await textarea.focus()
                 await textarea.click()
-                await page.keyboard.type(reply_text, delay=random.randint(40, 80))
-
-                # FIX: Force Input Event Activation
+                await page.keyboard.type(reply_text, delay=random.randint(50, 100))
+                
+                # FORCE ACTIVATION
                 await textarea.dispatch_event("input")
-                await asyncio.sleep(1)
                 await page.keyboard.press("Space")
                 await page.keyboard.press("Backspace")
-                await asyncio.sleep(2)
+                await asyncio.sleep(3) # Vital: Let X finish 'saving draft' background process
 
-                # Aggressive Verified Send
                 verified = False
                 for attempt in range(3):
-                    post_btn = page.locator('[data-testid="tweetButtonInline"]').first
-
-                    # Hotkey Attempt
+                    # 1. Primary: The Command-Enter Hotkey
                     await page.keyboard.press("Control+Enter")
+                    await asyncio.sleep(2)
 
-                    # JS Direct Click Attempt
-                    if await post_btn.is_visible():
-                        await post_btn.evaluate("el => el.click()")
+                    # 2. Secondary: Tab Navigation (Harder to block than clicks)
+                    if await page.locator('[data-testid="tweetTextarea_0"]').is_visible():
+                        print(f"🔄 Attempt {attempt+1}: Keyboard Navigation...")
+                        await page.keyboard.press("Tab")
+                        await asyncio.sleep(0.5)
+                        await page.keyboard.press("Enter")
 
                     try:
-                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=5000)
+                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=4000)
                         verified = True
                         break
-                    except Exception:
-                        print(f"🔄 Retry {attempt+1}...")
+                    except:
+                        # 3. Last Resort: Physical Coordinate Click
+                        post_btn = page.locator('[data-testid="tweetButtonInline"]').first
+                        box = await post_btn.bounding_box()
+                        if box:
+                            await page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
                         await asyncio.sleep(2)
 
                 if verified:
                     print(f"✅ Success: {target['id']}")
                     seen_ids.add(target['id'])
-                    with open(SEEN_POSTS_FILE, 'w') as f:
-                        json.dump(list(seen_ids), f)
+                    with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
                 else:
                     print(f"❌ Verification Failed: {target['id']}")
                     await page.keyboard.press("Escape")
 
-                await asyncio.sleep(random.uniform(25, 45))
-
+                await asyncio.sleep(random.uniform(25, 40))
             except Exception as e:
-                print(f"⚠️ Interaction Error: {e}")
+                print(f"⚠️ Error: {e}")
                 await page.keyboard.press("Escape")
 
         await browser.close()
-        print("🏁 Run complete.")
+        print("🏁 Done.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
