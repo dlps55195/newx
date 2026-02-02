@@ -160,71 +160,73 @@ async def run_bot():
         print(f"🎯 Candidates Found: {len(candidates)}")
 
         # 3. Interaction Loop
+        # REPLACE YOUR ENTIRE 'for target in candidates[:3]' LOOP WITH THIS:
         for target in candidates[:3]:
-            if target['id'] in seen_ids: 
-                continue
+            if target['id'] in seen_ids: continue
             
-            print(f"📝 Analyzing {target['data']['author']}...")
             reply_text = get_ai_reply(target['data'])
-            
-            if not reply_text: 
-                continue
-            print(f"🤖 Strategy: {reply_text}")
+            if not reply_text: continue
+            print(f"📝 Target: {target['data']['author']} | Strategy: {reply_text}")
 
             try:
-                # OPTIMIZATION: Center-Lock Scroll
-                await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'smooth'})")
+                # 1. INSTANT SNAP SCROLL (Prevents moving target errors)
+                await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'auto'})")
                 await asyncio.sleep(2)
 
-                # Open Reply Modal
+                # 2. COORDINATE-BASED CLICK (Bypasses 'Outside Viewport' errors)
                 reply_btn = target['element'].locator('[data-testid="reply"]').first
-                await reply_btn.click(force=True)
+                box = await reply_btn.bounding_box()
+                if box:
+                    # Clicks the exact center of the button on the screen
+                    await page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                else:
+                    await reply_btn.click(force=True)
                 
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=12000)
+                await textarea.wait_for(state="visible", timeout=10000)
                 
-                # FOCUS AND TYPE
-                await textarea.focus()
+                # 3. HUMAN-SIMULATED INPUT
                 await textarea.click()
-                await page.keyboard.type(reply_text, delay=random.randint(40, 80))
+                await page.keyboard.type(reply_text, delay=random.randint(40, 70))
                 
-                # FIX: Force Input Event Activation
+                # 4. JUMPSTART THE BUTTON (Forces X to enable the 'Post' button)
                 await textarea.dispatch_event("input")
                 await asyncio.sleep(1)
                 await page.keyboard.press("Space")
                 await page.keyboard.press("Backspace")
                 await asyncio.sleep(2)
 
-                # Aggressive Verified Send
+                # 5. AGGRESSIVE SUBMISSION
                 verified = False
                 for attempt in range(3):
                     post_btn = page.locator('[data-testid="tweetButtonInline"]').first
                     
-                    # Hotkey Attempt
+                    # Try hotkey first
                     await page.keyboard.press("Control+Enter")
                     
-                    # JS Direct Click Attempt
+                    # Try direct JS click if button is still there
                     if await post_btn.is_visible():
                         await post_btn.evaluate("el => el.click()")
 
                     try:
-                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=5000)
+                        # Success check: does the modal disappear?
+                        await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=4000)
                         verified = True
                         break
-                    except Exception:
+                    except:
                         print(f"🔄 Retry {attempt+1}...")
                         await asyncio.sleep(2)
 
                 if verified:
                     print(f"✅ Success: {target['id']}")
                     seen_ids.add(target['id'])
-                    with open(SEEN_POSTS_FILE, 'w') as f:
-                        json.dump(list(seen_ids), f)
+                    with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
                 else:
                     print(f"❌ Verification Failed: {target['id']}")
                     await page.keyboard.press("Escape")
 
-                await asyncio.sleep(random.uniform(25, 45))
+                # Random cooldown to avoid rate-limit detection
+                await asyncio.sleep(random.uniform(20, 35))
 
             except Exception as e:
                 print(f"⚠️ Interaction Error: {e}")
