@@ -137,20 +137,35 @@ async def run_bot():
             except: continue
 
         for target in candidates[:3]:
+            if target['id'] in seen_ids: continue
+            
             reply_text = get_ai_reply(target['data'])
             if not reply_text: continue
             print(f"📝 Target: {target['data']['author']} | Strategy: {reply_text}")
 
             try:
+                # 1. SCROLL & WAIT FOR UI SETTLE
                 await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'auto'})")
                 await asyncio.sleep(2)
 
-                await target['element'].locator('[data-testid="reply"]').first.click(force=True)
+                # 2. OPEN MODAL (Using JS to bypass mask)
+                reply_btn = target['element'].locator('[data-testid="reply"]').first
+                await reply_btn.evaluate("el => el.click()")
+                
+                # 3. WAIT FOR INTERCEPTING MASK TO DISAPPEAR
+                # This is the "wall" your log identified
+                try:
+                    mask = page.locator('[data-testid="mask"]')
+                    await mask.wait_for(state="hidden", timeout=5000)
+                except: pass
+
+                # 4. FOCUS TEXTAREA
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=12000)
-                await textarea.click()
+                await textarea.wait_for(state="visible", timeout=10000)
+                await textarea.focus()
                 await page.keyboard.type(reply_text, delay=random.randint(50, 100))
                 
+                # 5. ACTIVATE BUTTON
                 await textarea.dispatch_event("input")
                 await page.keyboard.press("Space")
                 await page.keyboard.press("Backspace")
@@ -158,31 +173,24 @@ async def run_bot():
 
                 verified = False
                 for attempt in range(3):
-                    # 1. LOG STATE BEFORE ATTEMPT
+                    # Diagnostic Log
                     await log_debug_state(page, target['id'], f"attempt_{attempt}")
 
-                    # 2. SUBMISSION ATTEMPT (Hotkey)
+                    # 6. ATTEMPT SUBMISSION
+                    # We try hotkey first, then a direct JS-forced click on the post button
                     await page.keyboard.press("Control+Enter")
                     await asyncio.sleep(2)
 
-                    # 3. VERIFY & FALLBACK
-                    if await page.locator('[data-testid="tweetTextarea_0"]').is_visible():
-                        print(f"🔄 Attempt {attempt+1}: Keyboard Navigation Fallback...")
-                        await page.keyboard.press("Tab")
-                        await asyncio.sleep(0.5)
-                        await page.keyboard.press("Enter")
+                    post_btn = page.locator('[data-testid="tweetButtonInline"]').first
+                    if await post_btn.is_visible():
+                        # JS Click ignores the 'mask' or 'intercepted pointer' error
+                        await post_btn.evaluate("el => el.click()")
                     
                     try:
-                        # Success check: Wait for the composer to disappear
                         await page.wait_for_selector('[data-testid="tweetTextarea_0"]', state="hidden", timeout=4000)
                         verified = True
                         break
                     except:
-                        # 4. FINAL FALLBACK: Coordinate Click
-                        post_btn = page.locator('[data-testid="tweetButtonInline"]').first
-                        box = await post_btn.bounding_box()
-                        if box:
-                            await page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
                         await asyncio.sleep(2)
 
                 if verified:
@@ -191,7 +199,6 @@ async def run_bot():
                     with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
                 else:
                     print(f"❌ Verification Failed: {target['id']}")
-                    await log_debug_state(page, target['id'], "FINAL_FAILURE")
                     await page.keyboard.press("Escape")
 
                 await asyncio.sleep(random.uniform(25, 40))
