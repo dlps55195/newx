@@ -13,32 +13,13 @@ LIST_URL = "https://x.com/i/lists/2011289206513930641"
 SEEN_POSTS_FILE = "seen_posts.json"
 AI_API_KEY = os.getenv("AI_API_KEY")
 
-# --- DEBUGGING FUNCTION ---
 async def log_debug_state(page, unique_id, stage):
-    """Captures a screenshot and checks for buttons using multiple strategies."""
+    """Captures a screenshot for diagnostics."""
     timestamp = datetime.now().strftime("%H%M%S")
     filename = f"debug_{unique_id}_{timestamp}_{stage}.png"
     await page.screenshot(path=filename)
     print(f"🔍 [DEBUG: {stage}] Saved screenshot: {filename}")
-    
-    # Strategy 1: Test ID
-    btn_id = page.locator('[data-testid="tweetButtonInline"]').first
-    
-    # Strategy 2: Role + Text (More robust)
-    btn_role = page.get_by_role("button", name=re.compile(r"Post|Reply", re.I)).first
 
-    found = False
-    if await btn_id.count() > 0 and await btn_id.is_visible():
-        print(f"📊 [ELEMENT STATE] Found via ID. Enabled: {await btn_id.is_enabled()}")
-        found = True
-    elif await btn_role.count() > 0 and await btn_role.is_visible():
-        print(f"📊 [ELEMENT STATE] Found via ROLE. Enabled: {await btn_role.is_enabled()}")
-        found = True
-    
-    if not found:
-        print("📊 [ELEMENT STATE]: Post/Reply button NOT FOUND in DOM.")
-
-# --- UTILS & AI ---
 def sanitize_cookies(cookie_list):
     cleaned = []
     for cookie in cookie_list:
@@ -49,7 +30,12 @@ def sanitize_cookies(cookie_list):
         cleaned.append(cookie)
     return cleaned
 
-system_instruction = f"""
+def get_ai_reply(tweet_data):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
+    
+    # --- THE PERFECT HUMAN PROMPT ---
+    system_instruction = f"""
     [CONTEXT]
     Post Author: {tweet_data['author']}
     Post Content: "{tweet_data['text']}"
@@ -62,21 +48,32 @@ system_instruction = f"""
     [STRICT LINGUISTIC RULES]
     - BANNED WORDS: leverage, delve, explore, unlock, unleash, foster, revolutionize, cutting-edge, synergy, innovative, testament, journey, passion.
     - NO generic praise: Never say "Great work," "Love this," or "Interesting insight."
-    - LOWERCASE ONLY: Do not capitalize sentences. It looks more like a human mobile user.
-    - BE SPECIFIC: You MUST mention one specific technical noun from their post (e.g., the specific DB, language, or UI tool they used).
-    - THE "TRADE-OFF" HOOK: Instead of agreeing, ask about a trade-off or a potential bug (e.g., "how's the cold start on that?" or "does that even work with [competitor]?").
+    - LOWERCASE ONLY: do not capitalize sentences.
+    - BE SPECIFIC: you MUST mention one specific technical noun from their post.
+    - THE "TRADE-OFF" HOOK: instead of agreeing, ask about a trade-off or a potential bug.
 
-    [ARCHETYPE OPTIONS] (Pick one):
-    1. THE TRENCHES: Mention a shared pain point related to their tech (e.g., "stripe webhooks always fail for me here lol").
-    2. THE SKEPTIC: Question the architecture (e.g., "sure, but the overhead on that seems wild").
-    3. THE SHORTHAND: One short, deadpan observation (e.g., "the styling is clean. tailwind?").
+    [ARCHETYPE OPTIONS]:
+    1. THE TRENCHES: mention a shared pain point (e.g., "stripe webhooks always fail for me here lol").
+    2. THE SKEPTIC: question the architecture (e.g., "sure, but the overhead on that seems wild").
+    3. THE SHORTHAND: one short, deadpan observation (e.g., "the styling is clean. tailwind?").
 
-    [OUTPUT RESTRICTION]
-    - Max 12 words. 
-    - No hashtags. No emojis.
-    - Output ONLY the raw reply text.
+    [OUTPUT]
+    - Max 12 words. No hashtags. No emojis. Raw reply text only.
     """
-# --- MAIN BOT LOOP ---
+    
+    try:
+        payload = {
+            "model": "google/gemini-2.0-flash-001",
+            "messages": [{"role": "user", "content": system_instruction}]
+        }
+        with httpx.Client() as client:
+            resp = client.post(url, headers=headers, json=payload, timeout=30.0)
+            if resp.status_code == 200:
+                content = resp.json()['choices'][0]['message']['content'].strip()
+                return content.replace('"', '').replace("'", "").lower()
+            return None
+    except: return None
+
 async def run_bot():
     print("💓 Bot Start: Resilient Engine Active")
     seen_ids = set()
@@ -102,47 +99,33 @@ async def run_bot():
 
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
         candidates = []
-        now = datetime.now(timezone.utc)
-
         for tweet in tweet_elements:
             try:
                 link = tweet.locator('a[href*="/status/"]').first
                 tweet_url = await link.get_attribute("href")
                 unique_id = tweet_url.split('/')[-1] if tweet_url else None
-                # Expanded time window for testing
                 if unique_id and unique_id not in seen_ids:
                     text = (await tweet.inner_text()).replace('\n', ' ')
                     author = await tweet.locator('div[dir="ltr"] > span').first.inner_text()
                     candidates.append({"element": tweet, "data": {"text": text, "author": author, "media_desc": "No media"}, "id": unique_id})
             except: continue
-        
-        print(f"🎯 Candidates Found: {len(candidates)}")
 
         for target in candidates[:3]:
             reply_text = get_ai_reply(target['data'])
             if not reply_text: continue
-            print(f"📝 Target: {target['data']['author']} | Strategy: {reply_text}")
+            print(f"📝 Target: {target['data']['author']} | Human Reply: {reply_text}")
 
             try:
-                # 1. SCROLL & PREP
                 await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'auto'})")
                 await asyncio.sleep(2)
-
-                # 2. OPEN REPLY (Using JS to bypass masks)
-                reply_btn = target['element'].locator('[data-testid="reply"]').first
-                await reply_btn.evaluate("el => el.click()")
+                await target['element'].locator('[data-testid="reply"]').first.evaluate("el => el.click()")
+                await asyncio.sleep(2)
                 
-                # 3. HANDLE MASK & TEXTAREA
-                try:
-                    await page.locator('[data-testid="mask"]').wait_for(state="hidden", timeout=4000)
-                except: pass
-
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
                 await textarea.wait_for(state="visible", timeout=10000)
                 await textarea.click()
-                await page.keyboard.type(reply_text, delay=random.randint(60, 100))
+                await page.keyboard.type(reply_text, delay=random.randint(60, 110))
                 
-                # 4. ACTIVATE STATE
                 await textarea.dispatch_event("input")
                 await page.keyboard.press("Space")
                 await page.keyboard.press("Backspace")
@@ -150,39 +133,25 @@ async def run_bot():
 
                 verified = False
                 for attempt in range(3):
-                    await log_debug_state(page, target['id'], f"attempt_{attempt}")
-
-                    # A. Primary: Hotkey
                     await page.keyboard.press("Control+Enter")
                     await asyncio.sleep(3)
-
-                    # B. Secondary: Click by Role (Pierces Shadow DOM)
-                    if await textarea.is_visible():
-                        print(f"🔄 Attempt {attempt+1}: Hotkey failed. Trying Smart Click...")
-                        # This finds ANY button with 'Post' or 'Reply' in it, ignoring specific IDs
-                        smart_btn = page.get_by_role("button", name=re.compile(r"Post|Reply", re.I)).first
-                        if await smart_btn.count() > 0:
-                             await smart_btn.click(force=True)
-                        else:
-                             # C. Fallback: ID Click
-                             fallback_btn = page.locator('[data-testid="tweetButtonInline"]').first
-                             if await fallback_btn.is_visible():
-                                 await fallback_btn.click(force=True)
-                        await asyncio.sleep(2)
-
-                    # Check for success
+                    
                     if not await textarea.is_visible():
                         verified = True
                         break
+                    
+                    # Smart Click Fallback
+                    smart_btn = page.get_by_role("button", name=re.compile(r"Post|Reply", re.I)).first
+                    if await smart_btn.count() > 0:
+                         await smart_btn.click(force=True)
+                         await asyncio.sleep(2)
 
                 if verified:
                     print(f"✅ Success: {target['id']}")
                     seen_ids.add(target['id'])
                     with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
                 else:
-                    print(f"❌ Verification Failed: {target['id']}")
-                    # Dump HTML context on final failure
-                    await page.screenshot(path=f"fail_{target['id']}.png")
+                    print(f"❌ Failed: {target['id']}")
                     await page.keyboard.press("Escape")
 
                 await asyncio.sleep(random.uniform(25, 40))
