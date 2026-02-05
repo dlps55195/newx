@@ -35,7 +35,16 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
+          
+          # 1. Stage the file that was changed by the bot
           git add seen_posts.json
+          
+          # 2. Commit it locally first
           git commit -m "update: seen posts memory [skip ci]" || echo "No changes to commit"
+          
+          # 3. Now pull the remote changes and put your commit on top
+          # This will now work because your local 'seen_posts.json' is committed
+          git pull --rebase origin main
+          
+          # 4. Push everything back to GitHub
           git push origin main
