@@ -119,11 +119,21 @@ async def run_bot():
 
         for tweet in tweet_elements:
             try:
+                # 1. CHECK IF IT'S A REPLY
+                # This looks for the "Replying to" text above the tweet
+                is_reply = await tweet.locator('div[data-testid="tweetTextarea_0_label"]').count() > 0 or \
+                           await tweet.locator('text=/Replying to/').count() > 0
+                
+                if is_reply:
+                    continue # Skip this; it's a reply, not an original post
+
+                # 2. PROCEED WITH ID CAPTURE
                 link = tweet.locator('a[href*="/status/"]').first
                 tweet_url = await link.get_attribute("href")
                 unique_id = tweet_url.split('/')[-1] if tweet_url else None
                 
                 if unique_id and unique_id not in seen_data:
+                    # Capture the rest of the data as before...
                     text = (await tweet.inner_text()).replace('\n', ' ')
                     author_el = tweet.locator('div[dir="ltr"] > span').first
                     author = await author_el.inner_text() if await author_el.count() > 0 else "Unknown"
@@ -131,10 +141,9 @@ async def run_bot():
                     candidates.append({
                         "element": tweet, 
                         "id": unique_id, 
-                        "data": {"text": text, "author": author, "media_desc": "Visual context included in post"}
+                        "data": {"text": text, "author": author, "media_desc": "Visual context included"}
                     })
             except: continue
-
         print(f"🎯 Found {len(candidates)} new posts to process.")
 
         for target in candidates[:3]: # Limit to 3 interactions per run to stay safe
