@@ -144,9 +144,13 @@ async def run_bot():
             print(f"💬 Replying to {target['data']['author']}: {reply_text}")
 
             try:
-                await target['element'].scroll_into_view_if_needed()
-                await asyncio.sleep(1)
-                await target['element'].locator('[data-testid="reply"]').first.click()
+                # Scroll the specific tweet to the center of the screen
+                await target['element'].evaluate("el => el.scrollIntoView({block: 'center'})")
+                await asyncio.sleep(2) # Give X time to render the buttons
+                
+                # Use a 'force' click to bypass viewport/overlay issues
+                reply_btn = target['element'].locator('[data-testid="reply"]').first
+                await reply_btn.click(force=True, timeout=5000)
                 
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
                 await textarea.wait_for(state="visible", timeout=10000)
