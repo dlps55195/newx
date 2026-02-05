@@ -44,13 +44,13 @@ def get_ai_reply(tweet_data):
 
     [X-POST BENCHMARKS / EXAMPLES]
     - Post: "Finally hit $2k MRR after 6 months of shipping every day. 🚀"
-      AI Logic: (Success + $2k) -> "huge milestone!! how are you celebrating? 🙌"
+      AI Logic: (Success + $2k) -> "huge milestone!! how are you celebrating? 🥳"
     - Post: "Struggling with these Stripe webhooks. Why is local testing so painful?"
       AI Logic: (Struggle + Stripe) -> "the stripe struggle is real, hope you fix it soon 😭"
     - Post: "Productivity hack: 5am gym session then 4 hours of deep work."
       AI Logic: (Action + 5am) -> "now im feeling guilty 🍪😭 when did you start doing thar?"
     - Post: "Is it just me or is the new X UI actually kind of nice?"
-      AI Logic: (Opinion + UI) -> "tbh i’m actually liking it too, looks way cleaner 🙌"
+      AI Logic: (Opinion + UI) -> "tbh i’m actually liking it too, looks way cleaner 👌"
 
     [STRICT STYLE CONSTRAINTS]
     - lowercase only.
