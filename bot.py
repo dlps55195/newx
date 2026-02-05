@@ -13,13 +13,6 @@ LIST_URL = "https://x.com/i/lists/2011289206513930641"
 SEEN_POSTS_FILE = "seen_posts.json"
 AI_API_KEY = os.getenv("AI_API_KEY")
 
-async def log_debug_state(page, unique_id, stage):
-    """Captures a screenshot for diagnostics."""
-    timestamp = datetime.now().strftime("%H%M%S")
-    filename = f"debug_{unique_id}_{timestamp}_{stage}.png"
-    await page.screenshot(path=filename)
-    print(f"🔍 [DEBUG: {stage}] Saved screenshot: {filename}")
-
 def sanitize_cookies(cookie_list):
     cleaned = []
     for cookie in cookie_list:
@@ -75,7 +68,7 @@ def get_ai_reply(tweet_data):
             resp = client.post(url, headers=headers, json=payload, timeout=30.0)
             if resp.status_code == 200:
                 content = resp.json()['choices'][0]['message']['content'].strip()
-                return content.replace('"', '').replace("'", "").lower()
+                return content.replace('"', '').lower()
             return None
     except: return None
 
@@ -86,24 +79,24 @@ async def run_bot():
         try:
             with open(SEEN_POSTS_FILE, 'r') as f:
                 data = json.load(f)
-                seen_ids = set(data) if isinstance(data, list) else set(data.keys())
+                seen_ids = set(data)
         except: pass
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled', '--no-sandbox'])
-        context = await browser.new_context(user_agent=UserAgent().random, viewport={'width': 1920, 'height': 1080})
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+        context = await browser.new_context(user_agent=UserAgent().random)
         
         cookie_raw = os.getenv("X_COOKIES")
         if not cookie_raw: return
         await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
 
         page = await context.new_page()
-        print(f"📡 Loading Feed...")
         await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(12) 
+        await asyncio.sleep(10) 
 
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
         candidates = []
+
         for tweet in tweet_elements:
             try:
                 link = tweet.locator('a[href*="/status/"]').first
@@ -112,60 +105,38 @@ async def run_bot():
                 if unique_id and unique_id not in seen_ids:
                     text = (await tweet.inner_text()).replace('\n', ' ')
                     author = await tweet.locator('div[dir="ltr"] > span').first.inner_text()
-                    candidates.append({"element": tweet, "data": {"text": text, "author": author, "media_desc": "No media"}, "id": unique_id})
+                    candidates.append({"element": tweet, "id": unique_id, "data": {"text": text, "author": author, "media_desc": "No media"}})
             except: continue
 
         for target in candidates[:3]:
             reply_text = get_ai_reply(target['data'])
             if not reply_text: continue
-            print(f"📝 Target: {target['data']['author']} | Human Reply: {reply_text}")
+            print(f"📝 Target: {target['data']['author']} | Reply: {reply_text}")
 
             try:
-                await target['element'].evaluate("el => el.scrollIntoView({block: 'center', behavior: 'auto'})")
-                await asyncio.sleep(2)
-                await target['element'].locator('[data-testid="reply"]').first.evaluate("el => el.click()")
-                await asyncio.sleep(2)
+                await target['element'].scroll_into_view_if_needed()
+                await target['element'].locator('[data-testid="reply"]').first.click()
                 
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
                 await textarea.wait_for(state="visible", timeout=10000)
-                await textarea.click()
-                await page.keyboard.type(reply_text, delay=random.randint(60, 110))
-                
-                await textarea.dispatch_event("input")
-                await page.keyboard.press("Space")
-                await page.keyboard.press("Backspace")
-                await asyncio.sleep(4) 
+                await textarea.fill(reply_text)
+                await asyncio.sleep(2)
 
-                verified = False
-                for attempt in range(3):
-                    await page.keyboard.press("Control+Enter")
-                    await asyncio.sleep(3)
-                    
-                    if not await textarea.is_visible():
-                        verified = True
-                        break
-                    
-                    # Smart Click Fallback
-                    smart_btn = page.get_by_role("button", name=re.compile(r"Post|Reply", re.I)).first
-                    if await smart_btn.count() > 0:
-                         await smart_btn.click(force=True)
-                         await asyncio.sleep(2)
+                # Send via Smart Click or Hotkey
+                await page.keyboard.press("Control+Enter")
+                await asyncio.sleep(3)
 
-                if verified:
+                if not await textarea.is_visible():
                     print(f"✅ Success: {target['id']}")
                     seen_ids.add(target['id'])
                     with open(SEEN_POSTS_FILE, 'w') as f: json.dump(list(seen_ids), f)
-                else:
-                    print(f"❌ Failed: {target['id']}")
-                    await page.keyboard.press("Escape")
-
-                await asyncio.sleep(random.uniform(25, 40))
+                
+                await asyncio.sleep(random.uniform(20, 35))
             except Exception as e:
-                print(f"⚠️ Interaction Error: {e}")
+                print(f"⚠️ Error: {e}")
                 await page.keyboard.press("Escape")
 
         await browser.close()
-        print("🏁 Done.")
 
 if __name__ == "__main__":
     asyncio.run(run_bot())
