@@ -119,10 +119,16 @@ async def run_bot():
 
         for tweet in tweet_elements:
             try:
-                # 1. CHECK IF IT'S A REPLY
-                # This looks for the "Replying to" text above the tweet
-                is_reply = await tweet.locator('div[data-testid="tweetTextarea_0_label"]').count() > 0 or \
-                           await tweet.locator('text=/Replying to/').count() > 0
+                # 1. Center the tweet
+                await target['element'].evaluate("el => el.scrollIntoView({block: 'center'})")
+                await asyncio.sleep(2)
+                
+                # 2. THE UNIVERSAL CLICKER: Bypasses viewport/blocking errors
+                reply_btn = target['element'].locator('[data-testid="reply"]').first
+                await reply_btn.evaluate("el => el.click()") # <--- The "Magic" line
+                
+                textarea = page.locator('[data-testid="tweetTextarea_0"]')
+                await textarea.wait_for(state="visible", timeout=10000)
                 
                 if is_reply:
                     continue # Skip this; it's a reply, not an original post
