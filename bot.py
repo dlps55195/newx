@@ -18,7 +18,7 @@ def sanitize_cookies(cookie_list):
     """Cleans cookie attributes for Playwright compatibility."""
     cleaned = []
     for cookie in cookie_list:
-        if "sameSite" in cookie and cookie["sameSite"] not in ["Strict", "Lax", "None"]:
+        if "sameSite" in cookie and cookie["sameSite"] not in ["Strict", "Lax", "None"]: 
             cookie["sameSite"] = "Lax"
         cookie.pop("hostOnly", None)
         cookie.pop("session", None)
