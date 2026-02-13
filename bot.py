@@ -109,15 +109,21 @@ async def run_bot():
         await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
         page = await context.new_page()
         
-        print(f"📡 Navigating to List...")
-        await page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
-        await asyncio.sleep(5) 
-
-        # 2. LOGIN DETECTION: Check if X kicked us out
-        if "login" in page.url or await page.locator('[data-testid="loginButton"]').count() > 0:
-            print("🚨 CRITICAL: Cookies are EXPIRED or INVALID. X is asking for login.")
-            await browser.close()
-            return
+       print(f"📡 Navigating to List...")
+        try:
+            # 1. Change wait_until to "commit" (much faster)
+            await page.goto(LIST_URL, wait_until="commit", timeout=60000)
+            
+            # 2. Specifically wait for the Tweets to load into the DOM
+            print("⏳ Waiting for tweets to appear...")
+            await page.wait_for_selector('article[data-testid="tweet"]', timeout=30000)
+            
+            # 3. Short human-like pause to let images/text settle
+            await asyncio.sleep(5) 
+        except Exception as e:
+            print(f"⚠️ Navigation Warning: {e}")
+            # Even if it times out, we try to proceed—sometimes the page is 
+            # actually loaded even if Playwright thinks it isn't.
 
         # 3. SCROLLING: Wake up the feed
         await page.evaluate("window.scrollBy(0, 800)")
