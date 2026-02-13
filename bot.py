@@ -26,7 +26,7 @@ def sanitize_cookies(cookie_list):
     return cleaned
 
 def get_ai_reply(tweet_data):
-    # --- PROMPT PRESERVED EXACTLY AS REQUESTED ---
+    # --- PROMPT PRESERVED EXACTLY ---
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
@@ -90,52 +90,51 @@ async def run_bot():
         except: pass
 
     async with async_playwright() as p:
-        # 1. STEALTH LAUNCH: Tricking X into thinking we are a real user
+        # Launch with Stealth Arguments
         browser = await p.chromium.launch(headless=True, args=[
             '--disable-blink-features=AutomationControlled',
             '--no-sandbox'
         ])
-        ua = UserAgent().random
         context = await browser.new_context(
             viewport={'width': 1280, 'height': 800},
-            user_agent=ua
+            user_agent=UserAgent().random
         )
         
         cookie_raw = os.getenv("X_COOKIES")
         if not cookie_raw:
-            print("❌ Error: X_COOKIES not found.")
+            print("❌ Error: X_COOKIES environment variable not found.")
             return
         
         await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
         page = await context.new_page()
         
-       print(f"📡 Navigating to List...")
+        # --- RESILIENT NAVIGATION (Fixes the Timeout Error) ---
+        print(f"📡 Navigating to List...")
         try:
-            # 1. Change wait_until to "commit" (much faster)
             await page.goto(LIST_URL, wait_until="commit", timeout=60000)
-            
-            # 2. Specifically wait for the Tweets to load into the DOM
-            print("⏳ Waiting for tweets to appear...")
+            print("⏳ Waiting for tweets to load...")
             await page.wait_for_selector('article[data-testid="tweet"]', timeout=30000)
-            
-            # 3. Short human-like pause to let images/text settle
             await asyncio.sleep(5) 
         except Exception as e:
-            print(f"⚠️ Navigation Warning: {e}")
-            # Even if it times out, we try to proceed—sometimes the page is 
-            # actually loaded even if Playwright thinks it isn't.
+            print(f"⚠️ Navigation Warning (Proceeding anyway): {e}")
 
-        # 3. SCROLLING: Wake up the feed
-        await page.evaluate("window.scrollBy(0, 800)")
+        # Check for Login Redirect
+        if "login" in page.url:
+            print("🚨 CRITICAL: Cookies are EXPIRED. Bot cannot see the list.")
+            await browser.close()
+            return
+
+        # Scroll to load fresh content
+        await page.evaluate("window.scrollBy(0, 1000)")
         await asyncio.sleep(3)
 
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
         candidates = []
 
-        # 4. DATA COLLECTION PHASE (No clicking yet!)
+        # DATA COLLECTION
         for tweet in tweet_elements:
             try:
-                # Skip if it's an ad or a reply
+                # Filter out ads and replies
                 is_reply = await tweet.locator('div:has-text("Replying to")').count() > 0
                 if is_reply: continue
 
@@ -144,7 +143,9 @@ async def run_bot():
                 unique_id = tweet_url.split('/')[-1] if tweet_url else None
                 
                 if unique_id and unique_id not in seen_data:
-                    text = (await tweet.locator('[data-testid="tweetText"]').inner_text()).replace('\n', ' ')
+                    text_el = tweet.locator('[data-testid="tweetText"]').first
+                    text = (await text_el.inner_text()).replace('\n', ' ') if await text_el.count() > 0 else ""
+                    
                     author_el = tweet.locator('div[dir="ltr"] > span').first
                     author = await author_el.inner_text() if await author_el.count() > 0 else "Unknown"
                     
@@ -155,9 +156,9 @@ async def run_bot():
                     })
             except: continue
         
-        print(f"🎯 Found {len(candidates)} new posts to process.")
+        print(f"🎯 Found {len(candidates)} new posts.")
 
-        # 5. INTERACTION PHASE
+        # INTERACTION
         for target in candidates[:3]: 
             reply_text = get_ai_reply(target['data'])
             if not reply_text: continue
@@ -165,45 +166,34 @@ async def run_bot():
             print(f"💬 Replying to {target['data']['author']}: {reply_text}")
 
             try:
-                # Focus the tweet
                 await target['element'].scroll_into_view_if_needed()
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 
-                # Use the 'Magic' line correctly here
                 reply_btn = target['element'].locator('[data-testid="reply"]').first
                 await reply_btn.click(force=True)
                 
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=5000)
+                await textarea.wait_for(state="visible", timeout=10000)
                 
-                # Human-like typing
                 await textarea.click()
                 for char in reply_text:
                     await page.keyboard.type(char)
-                    await asyncio.sleep(random.uniform(0.02, 0.08))
+                    await asyncio.sleep(random.uniform(0.02, 0.07))
                 
-                await asyncio.sleep(1)
-                
-                # Press Post
+                await asyncio.sleep(2)
                 await page.keyboard.press("Control+Enter")
-                await asyncio.sleep(4)
+                await asyncio.sleep(5)
 
-                # Verify success
+                # Verification and cleanup
                 if not await textarea.is_visible():
-                    print(f"✅ Post sent for ID: {target['id']}")
+                    print(f"✅ Success: {target['id']}")
                     seen_data[target['id']] = time.time()
+                    with open(SEEN_POSTS_FILE, 'w') as f:
+                        json.dump(seen_data, f)
                 else:
-                    # Fallback click
-                    post_btn = page.locator('[data-testid="tweetButtonInline"]').first
-                    if await post_btn.is_visible():
-                        await post_btn.click()
-                        await asyncio.sleep(3)
-                        seen_data[target['id']] = time.time()
-                
-                with open(SEEN_POSTS_FILE, 'w') as f:
-                    json.dump(seen_data, f)
+                    await page.keyboard.press("Escape")
 
-                await asyncio.sleep(random.uniform(10, 20))
+                await asyncio.sleep(random.uniform(15, 30))
                 
             except Exception as e:
                 print(f"⚠️ Interaction Error: {e}")
