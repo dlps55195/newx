@@ -26,10 +26,10 @@ def sanitize_cookies(cookie_list):
     return cleaned
 
 def get_ai_reply(tweet_data):
+    # --- PROMPT PRESERVED EXACTLY AS REQUESTED ---
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
     
-    # --- THE PERFECT HUMAN PROMPT ---
     system_instruction = f"""
     [POST CONTEXT]
     Author: {tweet_data['author']}
@@ -81,66 +81,64 @@ async def run_bot():
     current_time = time.time()
     seen_data = {}
     
-    # --- LOAD & PRUNE MEMORY ---
     if os.path.exists(SEEN_POSTS_FILE):
         try:
             with open(SEEN_POSTS_FILE, 'r') as f:
                 raw_data = json.load(f)
-                # Convert old list format to timestamp dict if necessary
-                if isinstance(raw_data, list):
-                    seen_data = {post_id: current_time for post_id in raw_data}
-                else:
-                    seen_data = raw_data
-            
-            # Remove anything older than 24 hours (86400 seconds)
+                seen_data = raw_data if isinstance(raw_data, dict) else {p: current_time for p in raw_data}
             seen_data = {k: v for k, v in seen_data.items() if current_time - v < 86400}
-            print(f"🧹 Memory Pruned: {len(seen_data)} active logs remaining.")
-        except Exception as e:
-            print(f"⚠️ Memory Load Error: {e}")
+        except: pass
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-blink-features=AutomationControlled'])
-        context = await browser.new_context(user_agent=UserAgent().random)
+        # 1. STEALTH LAUNCH: Tricking X into thinking we are a real user
+        browser = await p.chromium.launch(headless=True, args=[
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox'
+        ])
+        ua = UserAgent().random
+        context = await browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent=ua
+        )
         
         cookie_raw = os.getenv("X_COOKIES")
         if not cookie_raw:
-            print("❌ Error: X_COOKIES environment variable not found.")
+            print("❌ Error: X_COOKIES not found.")
             return
         
         await context.add_cookies(sanitize_cookies(json.loads(cookie_raw)))
         page = await context.new_page()
         
         print(f"📡 Navigating to List...")
-        await page.goto(LIST_URL, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(10) 
+        await page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
+        await asyncio.sleep(5) 
+
+        # 2. LOGIN DETECTION: Check if X kicked us out
+        if "login" in page.url or await page.locator('[data-testid="loginButton"]').count() > 0:
+            print("🚨 CRITICAL: Cookies are EXPIRED or INVALID. X is asking for login.")
+            await browser.close()
+            return
+
+        # 3. SCROLLING: Wake up the feed
+        await page.evaluate("window.scrollBy(0, 800)")
+        await asyncio.sleep(3)
 
         tweet_elements = await page.locator('article[data-testid="tweet"]').all()
         candidates = []
 
+        # 4. DATA COLLECTION PHASE (No clicking yet!)
         for tweet in tweet_elements:
             try:
-                # 1. Center the tweet
-                await target['element'].evaluate("el => el.scrollIntoView({block: 'center'})")
-                await asyncio.sleep(2)
-                
-                # 2. THE UNIVERSAL CLICKER: Bypasses viewport/blocking errors
-                reply_btn = target['element'].locator('[data-testid="reply"]').first
-                await reply_btn.evaluate("el => el.click()") # <--- The "Magic" line
-                
-                textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=10000)
-                
-                if is_reply:
-                    continue # Skip this; it's a reply, not an original post
+                # Skip if it's an ad or a reply
+                is_reply = await tweet.locator('div:has-text("Replying to")').count() > 0
+                if is_reply: continue
 
-                # 2. PROCEED WITH ID CAPTURE
                 link = tweet.locator('a[href*="/status/"]').first
                 tweet_url = await link.get_attribute("href")
                 unique_id = tweet_url.split('/')[-1] if tweet_url else None
                 
                 if unique_id and unique_id not in seen_data:
-                    # Capture the rest of the data as before...
-                    text = (await tweet.inner_text()).replace('\n', ' ')
+                    text = (await tweet.locator('[data-testid="tweetText"]').inner_text()).replace('\n', ' ')
                     author_el = tweet.locator('div[dir="ltr"] > span').first
                     author = await author_el.inner_text() if await author_el.count() > 0 else "Unknown"
                     
@@ -150,61 +148,56 @@ async def run_bot():
                         "data": {"text": text, "author": author, "media_desc": "Visual context included"}
                     })
             except: continue
+        
         print(f"🎯 Found {len(candidates)} new posts to process.")
 
-        for target in candidates[:3]: # Limit to 3 interactions per run to stay safe
+        # 5. INTERACTION PHASE
+        for target in candidates[:3]: 
             reply_text = get_ai_reply(target['data'])
             if not reply_text: continue
             
             print(f"💬 Replying to {target['data']['author']}: {reply_text}")
 
             try:
-                # Scroll the specific tweet to the center of the screen
-                await target['element'].evaluate("el => el.scrollIntoView({block: 'center'})")
-                await asyncio.sleep(2) # Give X time to render the buttons
+                # Focus the tweet
+                await target['element'].scroll_into_view_if_needed()
+                await asyncio.sleep(1)
                 
-                # Use a 'force' click to bypass viewport/overlay issues
+                # Use the 'Magic' line correctly here
                 reply_btn = target['element'].locator('[data-testid="reply"]').first
-                await reply_btn.click(force=True, timeout=5000)
+                await reply_btn.click(force=True)
                 
                 textarea = page.locator('[data-testid="tweetTextarea_0"]')
-                await textarea.wait_for(state="visible", timeout=10000)
+                await textarea.wait_for(state="visible", timeout=5000)
                 
                 # Human-like typing
                 await textarea.click()
                 for char in reply_text:
                     await page.keyboard.type(char)
-                    await asyncio.sleep(random.uniform(0.05, 0.15))
+                    await asyncio.sleep(random.uniform(0.02, 0.08))
                 
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 
-                # Success verification loop
-                verified = False
-                for attempt in range(2):
-                    await page.keyboard.press("Control+Enter")
-                    await asyncio.sleep(4)
-                    
-                    if not await textarea.is_visible():
-                        verified = True
-                        break
-                    
-                    # Manual button click fallback
-                    post_btn = page.get_by_role("button", name=re.compile(r"Post|Reply", re.I)).first
+                # Press Post
+                await page.keyboard.press("Control+Enter")
+                await asyncio.sleep(4)
+
+                # Verify success
+                if not await textarea.is_visible():
+                    print(f"✅ Post sent for ID: {target['id']}")
+                    seen_data[target['id']] = time.time()
+                else:
+                    # Fallback click
+                    post_btn = page.locator('[data-testid="tweetButtonInline"]').first
                     if await post_btn.is_visible():
                         await post_btn.click()
                         await asyncio.sleep(3)
+                        seen_data[target['id']] = time.time()
+                
+                with open(SEEN_POSTS_FILE, 'w') as f:
+                    json.dump(seen_data, f)
 
-                if verified:
-                    print(f"✅ Post successfully sent for ID: {target['id']}")
-                    seen_data[target['id']] = time.time()
-                    with open(SEEN_POSTS_FILE, 'w') as f:
-                        json.dump(seen_data, f)
-                else:
-                    print(f"❌ Could not verify post send for ID: {target['id']}")
-                    await page.keyboard.press("Escape")
-
-                # Jitter delay between different users
-                await asyncio.sleep(random.uniform(30, 60))
+                await asyncio.sleep(random.uniform(10, 20))
                 
             except Exception as e:
                 print(f"⚠️ Interaction Error: {e}")
