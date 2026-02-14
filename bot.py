@@ -56,7 +56,7 @@ def get_ai_reply(tweet_data):
     - lowercase only.
     - Max 12 words.
     - 1-2 emojis max.
-    - Slang allowed: lol, rn, tbh, vibe, huge, same, honestly.
+    - Slang allowed: lol, rn, tbh, huge, same, honestly.
     - BANNED: delve, leverage, explore, transformative, "nice post!", "great work!".
     - Output ONLY the raw reply text.
     """
